@@ -51,9 +51,14 @@
   }
   </script>
 
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
+
+  <div class="scroll-progress" id="scrollProgress"></div>
 
   <!-- ===== Navigation ===== -->
   <nav class="nav" role="navigation" aria-label="Main navigation">
@@ -381,6 +386,37 @@
   </section>
 
 
+  <!-- ===== Trust Stats ===== -->
+  <section class="section" id="trust" style="background: linear-gradient(180deg, var(--color-bg) 0%, rgba(137,207,240,0.05) 50%, var(--color-bg) 100%);">
+    <div class="container">
+      <div class="section-header reveal">
+        <span class="section-header__label">Why Trust MonitorMyAir</span>
+        <h2 class="section-header__title">Built on Real-World Experience</h2>
+        <p class="section-header__desc">Every piece of guidance in our system comes from actual inspection, remediation, and consultation experience — not generic internet advice.</p>
+      </div>
+
+      <div class="stats reveal">
+        <div class="stat">
+          <span class="stat__number" data-count="1500" data-suffix="+">0</span>
+          <span class="stat__label">Consultations</span>
+        </div>
+        <div class="stat">
+          <span class="stat__number" data-count="200" data-suffix="+">0</span>
+          <span class="stat__label">Plans Reviewed</span>
+        </div>
+        <div class="stat">
+          <span class="stat__number" data-count="15" data-suffix="+">0</span>
+          <span class="stat__label">Years Experience</span>
+        </div>
+        <div class="stat">
+          <span class="stat__number" data-count="100" data-suffix="%">0</span>
+          <span class="stat__label">Independent</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
   <!-- ===== Library Access CTA ===== -->
   <section class="section" id="library-cta">
     <div class="container">
@@ -432,7 +468,7 @@
       </div>
 
       <div class="footer__bottom">
-        <span>&copy; 2025 MonitorMyAir. All rights reserved.</span>
+        <span>&copy; 2025–2026 MonitorMyAir. All rights reserved.</span>
         <div class="footer__bottom-links">
           <a href="policies/disclaimer.html">Disclaimer</a>
           <a href="policies/privacy-policy.html">Privacy Policy</a>

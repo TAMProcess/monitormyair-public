@@ -194,8 +194,12 @@
     }
 
     function resize() {
-      width = canvas.width = canvas.offsetWidth;
-      height = canvas.height = canvas.offsetHeight;
+      const dpr = window.devicePixelRatio || 1;
+      width = canvas.offsetWidth;
+      height = canvas.offsetHeight;
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
     function drawConnections() {
@@ -274,11 +278,59 @@
   /* ---- Active nav link ---- */
   const currentPath = window.location.pathname;
   document.querySelectorAll('.nav__link, .nav__dropdown-item').forEach(link => {
-    if (link.getAttribute('href') === currentPath ||
-        (currentPath.endsWith('/') && link.getAttribute('href') === '/index.html') ||
-        (currentPath === '/' && link.getAttribute('href') === '/index.html')) {
+    const href = link.getAttribute('href');
+    if (!href || href === '#') return;
+    const hrefNorm = href.replace(/^\.\.\//, '').replace(/^\.\//, '');
+    if (currentPath.endsWith(hrefNorm) ||
+        (currentPath.endsWith('/') && (hrefNorm === 'index.html' || hrefNorm === '../index.html'))) {
       link.classList.add('active');
     }
   });
+
+
+  /* ---- Scroll Progress Bar ---- */
+  const scrollProgress = document.getElementById('scrollProgress');
+  if (scrollProgress) {
+    window.addEventListener('scroll', () => {
+      const scrollTop = document.documentElement.scrollTop;
+      const scrollHeight = document.documentElement.scrollHeight - document.documentElement.clientHeight;
+      const progress = scrollHeight > 0 ? (scrollTop / scrollHeight) * 100 : 0;
+      scrollProgress.style.width = progress + '%';
+    }, { passive: true });
+  }
+
+
+  /* ---- Animated Counters ---- */
+  const counters = document.querySelectorAll('[data-count]');
+  if (counters.length && 'IntersectionObserver' in window) {
+    const counterObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          animateCounter(entry.target);
+          counterObserver.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.3 });
+
+    counters.forEach(el => counterObserver.observe(el));
+  }
+
+  function animateCounter(el) {
+    const target = parseInt(el.getAttribute('data-count'), 10);
+    const suffix = el.getAttribute('data-suffix') || '';
+    const duration = 2000;
+    const start = performance.now();
+
+    function update(now) {
+      const elapsed = now - start;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const current = Math.round(eased * target);
+      el.textContent = current.toLocaleString() + suffix;
+      if (progress < 1) requestAnimationFrame(update);
+    }
+
+    requestAnimationFrame(update);
+  }
 
 })();

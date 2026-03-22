@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap');
+
 /* ===================================================
    MonitorMyAir — Glassmorphism Design System
    Clean White + Translucent Neon + Baby Blue
@@ -211,6 +213,19 @@ p { margin-bottom: var(--space-md); color: var(--color-text-secondary); }
   box-shadow: 0 2px 24px rgba(11, 26, 46, 0.06);
 }
 
+/* Scroll progress bar */
+.scroll-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 3px;
+  width: 0;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-neon-cyan), var(--color-baby-blue));
+  z-index: 1001;
+  transition: width 0.1s linear;
+  pointer-events: none;
+}
+
 .nav__inner {
   max-width: var(--max-width);
   margin: 0 auto;
@@ -350,6 +365,19 @@ p { margin-bottom: var(--space-md); color: var(--color-text-secondary); }
   background: currentColor;
   margin: 5px 0;
   transition: var(--transition-fast);
+  transform-origin: center;
+}
+
+.nav__menu-btn[aria-expanded="true"] span:nth-child(1) {
+  transform: rotate(45deg) translate(5px, 5px);
+}
+
+.nav__menu-btn[aria-expanded="true"] span:nth-child(2) {
+  opacity: 0;
+}
+
+.nav__menu-btn[aria-expanded="true"] span:nth-child(3) {
+  transform: rotate(-45deg) translate(5px, -5px);
 }
 
 
@@ -555,10 +583,17 @@ p { margin-bottom: var(--space-md); color: var(--color-text-secondary); }
 }
 
 .hero__title span {
-  background: linear-gradient(135deg, var(--color-accent), var(--color-baby-blue));
+  background: linear-gradient(135deg, var(--color-accent), var(--color-baby-blue), var(--color-neon-cyan), var(--color-accent));
+  background-size: 300% 300%;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+  animation: gradientShift 8s ease infinite;
+}
+
+@keyframes gradientShift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
 }
 
 .hero__subtitle {
@@ -1328,5 +1363,3 @@ p { margin-bottom: var(--space-md); color: var(--color-text-secondary); }
 }
 
 
-/* --- Google Fonts Import --- */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap');
