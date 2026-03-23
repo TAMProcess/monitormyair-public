@@ -171,7 +171,13 @@
         <p class="section-header__desc">Most people have never seen what floats in their indoor air. Click through three views to see what dust, mold-contaminated particles, and invisible chemical gases really look like.</p>
       </div>
 
-      <div class="air-vis reveal">
+      <!-- Particle cloud button — click to reveal the tool -->
+      <div class="air-cloud-btn reveal" id="airCloudBtn" role="button" tabindex="0" aria-label="Open air sample visualizer">
+        <canvas id="airCloudCanvas"></canvas>
+        <span class="air-cloud-btn__label">Tap to Explore</span>
+      </div>
+
+      <div class="air-vis air-vis--collapsed reveal">
         <!-- Stage: arrows + canvas -->
         <div class="air-vis__stage">
           <button class="air-vis__arrow air-vis__arrow--prev" id="airVisPrev" aria-label="Previous view">

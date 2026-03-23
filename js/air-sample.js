@@ -2,28 +2,197 @@
    "What You're Actually Breathing" — Air Sample Jar
    Three-scene swipeable visual: Dust → Mold Binding → VOCs
    Realistic glass jar with Tyndall beam, carousel navigation
+   Collapsible: hidden behind particle cloud button, auto-closes on scroll-away
    ============================================================ */
 (function () {
   'use strict';
 
-  const canvas = document.getElementById('airSampleCanvas');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const wrap = canvas.parentElement;
+  /* ===================== CLOUD BUTTON ANIMATION ===================== */
+  var cloudCanvas = document.getElementById('airCloudCanvas');
+  var cloudBtn = document.getElementById('airCloudBtn');
+  var airVis = document.querySelector('.air-vis');
 
-  /* ---- State ---- */
-  let scene = 0;
-  const SCENES = 3;
-  let W, H, dpr;
-  let jar = {};
-  let particles = [];
-  let spores = [];
-  let wisps = [];
-  let moldTimer = 0;
-  let animId;
+  if (!cloudCanvas || !cloudBtn || !airVis) return;
+
+  var cCtx = cloudCanvas.getContext('2d');
+  var cW, cH, cDpr, cloudAnimId;
+  var cloudParticles = [];
+  var CLOUD_COUNT = 28;
+  var cloudTime = 0;
+
+  function CloudMote(idx) {
+    this.idx = idx;
+    this.orbitR = 25 + Math.random() * 30;
+    this.angle = (idx / CLOUD_COUNT) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
+    this.speed = 0.006 + Math.random() * 0.008;
+    this.size = 2.5 + Math.random() * 4;
+    this.alpha = 0.15 + Math.random() * 0.3;
+    this.wobbleAmp = 1 + Math.random() * 3;
+    this.wobbleFreq = 0.015 + Math.random() * 0.02;
+    this.wobblePhase = Math.random() * Math.PI * 2;
+    // Random cyan/blue/white tints
+    var tints = [
+      '0,229,255',   // neon cyan
+      '137,207,240',  // baby blue
+      '200,225,245',  // light glass
+      '255,255,255'   // white
+    ];
+    this.rgb = tints[Math.floor(Math.random() * tints.length)];
+  }
+
+  function resizeCloud() {
+    cDpr = window.devicePixelRatio || 1;
+    var rect = cloudCanvas.parentElement.getBoundingClientRect();
+    cW = rect.width;
+    cH = rect.height;
+    cloudCanvas.width = cW * cDpr;
+    cloudCanvas.height = cH * cDpr;
+    cloudCanvas.style.width = cW + 'px';
+    cloudCanvas.style.height = cH + 'px';
+    cCtx.setTransform(cDpr, 0, 0, cDpr, 0, 0);
+  }
+
+  function initCloud() {
+    resizeCloud();
+    cloudParticles = [];
+    for (var i = 0; i < CLOUD_COUNT; i++) {
+      cloudParticles.push(new CloudMote(i));
+    }
+    cloudLoop();
+  }
+
+  function cloudLoop() {
+    cloudTime++;
+    cCtx.clearRect(0, 0, cW, cH);
+
+    var cx = cW / 2;
+    var cy = cH / 2;
+    var scale = Math.min(cW, cH) / 160;
+
+    // Subtle center glow
+    var glow = cCtx.createRadialGradient(cx, cy, 0, cx, cy, 45 * scale);
+    glow.addColorStop(0, 'rgba(0,229,255,0.06)');
+    glow.addColorStop(0.6, 'rgba(0,229,255,0.02)');
+    glow.addColorStop(1, 'rgba(0,229,255,0)');
+    cCtx.fillStyle = glow;
+    cCtx.beginPath();
+    cCtx.arc(cx, cy, 50 * scale, 0, Math.PI * 2);
+    cCtx.fill();
+
+    for (var i = 0; i < cloudParticles.length; i++) {
+      var p = cloudParticles[i];
+      p.angle += p.speed;
+      var wobble = Math.sin(cloudTime * p.wobbleFreq + p.wobblePhase) * p.wobbleAmp;
+      var r = (p.orbitR + wobble) * scale;
+      var x = cx + Math.cos(p.angle) * r;
+      var y = cy + Math.sin(p.angle) * r;
+
+      // Trail / soft glow
+      cCtx.save();
+      cCtx.globalAlpha = p.alpha * 0.3;
+      var trG = cCtx.createRadialGradient(x, y, 0, x, y, p.size * 3 * scale);
+      trG.addColorStop(0, 'rgba(' + p.rgb + ',0.3)');
+      trG.addColorStop(1, 'rgba(' + p.rgb + ',0)');
+      cCtx.fillStyle = trG;
+      cCtx.beginPath();
+      cCtx.arc(x, y, p.size * 3 * scale, 0, Math.PI * 2);
+      cCtx.fill();
+      cCtx.restore();
+
+      // Core dot
+      cCtx.save();
+      cCtx.globalAlpha = p.alpha;
+      cCtx.fillStyle = 'rgba(' + p.rgb + ',1)';
+      cCtx.beginPath();
+      cCtx.arc(x, y, p.size * 0.5 * scale, 0, Math.PI * 2);
+      cCtx.fill();
+      cCtx.restore();
+    }
+
+    cloudAnimId = requestAnimationFrame(cloudLoop);
+  }
+
+  function stopCloud() {
+    if (cloudAnimId) { cancelAnimationFrame(cloudAnimId); cloudAnimId = null; }
+  }
+
+  // Start the cloud animation immediately
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initCloud);
+  } else {
+    initCloud();
+  }
+
+  window.addEventListener('resize', function () {
+    if (cloudAnimId) resizeCloud();
+  });
+
+  /* ===================== EXPAND / COLLAPSE ===================== */
+  var jarInitialized = false;
+
+  function expandTool() {
+    cloudBtn.classList.add('air-cloud-btn--hidden');
+    airVis.classList.remove('air-vis--collapsed');
+    airVis.classList.add('air-vis--open');
+    stopCloud();
+
+    if (!jarInitialized) {
+      jarInitialized = true;
+      // Small delay so DOM has time to layout the visible container
+      setTimeout(jarInit, 80);
+    } else {
+      // Re-trigger resize + loop if already initialized
+      jarResize();
+      if (!jarAnimId) jarLoop();
+    }
+  }
+
+  function collapseTool() {
+    airVis.classList.remove('air-vis--open');
+    airVis.classList.add('air-vis--collapsed');
+    cloudBtn.classList.remove('air-cloud-btn--hidden');
+    // Stop the jar to save CPU
+    if (jarAnimId) { cancelAnimationFrame(jarAnimId); jarAnimId = null; }
+    // Restart cloud
+    if (!cloudAnimId) initCloud();
+  }
+
+  // Click / tap / keyboard on cloud button
+  cloudBtn.addEventListener('click', expandTool);
+  cloudBtn.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expandTool(); }
+  });
+
+  // IntersectionObserver: auto-collapse when section scrolls mostly off-screen
+  var section = document.getElementById('air-sample');
+  if (section && 'IntersectionObserver' in window) {
+    var obs = new IntersectionObserver(function (entries) {
+      if (!entries[0].isIntersecting && airVis.classList.contains('air-vis--open')) {
+        collapseTool();
+      }
+    }, { threshold: 0.05 });
+    obs.observe(section);
+  }
+
+  /* ===================== JAR VISUALIZER (deferred) ===================== */
+  var canvas, ctx, wrap;
+  var scene = 0;
+  var SCENES = 3;
+  var W, H, dpr;
+  var jar = {};
+  var particles = [];
+  var spores = [];
+  var wisps = [];
+  var moldTimer = 0;
+  var jarAnimId;
 
   /* ===================== RESIZE ===================== */
-  function resize() {
+  function jarResize() {
+    canvas = document.getElementById('airSampleCanvas');
+    if (!canvas) return;
+    ctx = canvas.getContext('2d');
+    wrap = canvas.parentElement;
+
     dpr = window.devicePixelRatio || 1;
     var rect = wrap.getBoundingClientRect();
     W = rect.width;
@@ -544,7 +713,7 @@
   }
 
   /* ===================== MAIN LOOP ===================== */
-  function loop() {
+  function jarLoop() {
     ctx.clearRect(0, 0, W, H);
     drawJar();
 
@@ -591,7 +760,7 @@
     }
 
     ctx.restore();
-    animId = requestAnimationFrame(loop);
+    jarAnimId = requestAnimationFrame(jarLoop);
   }
 
   /* ===================== NAVIGATION ===================== */
@@ -624,21 +793,17 @@
     }, { passive: true });
   }
 
-  /* ===================== INIT ===================== */
-  function init() {
-    resize();
+  /* ===================== INIT (deferred — called on expand) ===================== */
+  function jarInit() {
+    jarResize();
     setupNav();
-    loop();
+    jarLoop();
     var rt;
     window.addEventListener('resize', function () {
+      if (!jarAnimId) return; // only resize when running
       clearTimeout(rt);
-      rt = setTimeout(resize, 200);
+      rt = setTimeout(jarResize, 200);
     });
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
-  }
 })();
