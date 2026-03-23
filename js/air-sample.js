@@ -17,27 +17,45 @@
   var cCtx = cloudCanvas.getContext('2d');
   var cW, cH, cDpr, cloudAnimId;
   var cloudParticles = [];
-  var CLOUD_COUNT = 28;
+  var CLOUD_COUNT = 45;
   var cloudTime = 0;
 
   function CloudMote(idx) {
     this.idx = idx;
-    this.orbitR = 25 + Math.random() * 30;
-    this.angle = (idx / CLOUD_COUNT) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
-    this.speed = 0.006 + Math.random() * 0.008;
-    this.size = 2.5 + Math.random() * 4;
-    this.alpha = 0.15 + Math.random() * 0.3;
-    this.wobbleAmp = 1 + Math.random() * 3;
-    this.wobbleFreq = 0.015 + Math.random() * 0.02;
+    // Varied orbit layers: inner dense core + outer wisps
+    var layer = Math.random();
+    if (layer < 0.35) {
+      this.orbitR = 8 + Math.random() * 18;   // tight inner core
+      this.size = 6 + Math.random() * 8;
+      this.alpha = 0.12 + Math.random() * 0.18;
+    } else if (layer < 0.7) {
+      this.orbitR = 22 + Math.random() * 22;  // mid ring
+      this.size = 8 + Math.random() * 12;
+      this.alpha = 0.08 + Math.random() * 0.15;
+    } else {
+      this.orbitR = 38 + Math.random() * 20;  // outer wisps
+      this.size = 10 + Math.random() * 16;
+      this.alpha = 0.04 + Math.random() * 0.10;
+    }
+    this.angle = (idx / CLOUD_COUNT) * Math.PI * 2 + (Math.random() - 0.5) * 1.2;
+    this.speed = 0.003 + Math.random() * 0.007;
+    if (Math.random() < 0.3) this.speed *= -1; // some orbit opposite
+    this.wobbleAmp = 2 + Math.random() * 6;
+    this.wobbleFreq = 0.008 + Math.random() * 0.015;
     this.wobblePhase = Math.random() * Math.PI * 2;
-    // Random cyan/blue/white tints
+    this.breathPhase = Math.random() * Math.PI * 2;
+    // Soft cyan/blue palette
     var tints = [
-      '0,229,255',   // neon cyan
+      '0,229,255',    // neon cyan
+      '0,200,235',    // darker cyan
+      '100,210,245',  // mid blue
       '137,207,240',  // baby blue
-      '200,225,245',  // light glass
-      '255,255,255'   // white
+      '180,225,250',  // light glass
+      '220,240,255'   // near-white
     ];
     this.rgb = tints[Math.floor(Math.random() * tints.length)];
+    // Trail history (last 4 positions)
+    this.trail = [];
   }
 
   function resizeCloud() {
@@ -69,44 +87,83 @@
     var cy = cH / 2;
     var scale = Math.min(cW, cH) / 160;
 
-    // Subtle center glow
-    var glow = cCtx.createRadialGradient(cx, cy, 0, cx, cy, 45 * scale);
-    glow.addColorStop(0, 'rgba(0,229,255,0.06)');
-    glow.addColorStop(0.6, 'rgba(0,229,255,0.02)');
-    glow.addColorStop(1, 'rgba(0,229,255,0)');
-    cCtx.fillStyle = glow;
+    // Global breathing pulse
+    var breath = 1 + Math.sin(cloudTime * 0.012) * 0.06;
+
+    // Layered center glow — nebula-like
+    var g1 = cCtx.createRadialGradient(cx, cy, 0, cx, cy, 55 * scale);
+    g1.addColorStop(0, 'rgba(0,229,255,0.10)');
+    g1.addColorStop(0.3, 'rgba(0,200,240,0.06)');
+    g1.addColorStop(0.7, 'rgba(100,180,230,0.02)');
+    g1.addColorStop(1, 'rgba(0,229,255,0)');
+    cCtx.fillStyle = g1;
     cCtx.beginPath();
-    cCtx.arc(cx, cy, 50 * scale, 0, Math.PI * 2);
+    cCtx.arc(cx, cy, 58 * scale * breath, 0, Math.PI * 2);
+    cCtx.fill();
+
+    // Second diffuse glow layer
+    var g2 = cCtx.createRadialGradient(cx - 5 * scale, cy + 3 * scale, 0, cx, cy, 40 * scale);
+    g2.addColorStop(0, 'rgba(137,207,240,0.07)');
+    g2.addColorStop(0.5, 'rgba(0,229,255,0.03)');
+    g2.addColorStop(1, 'rgba(0,229,255,0)');
+    cCtx.fillStyle = g2;
+    cCtx.beginPath();
+    cCtx.arc(cx, cy, 42 * scale * breath, 0, Math.PI * 2);
     cCtx.fill();
 
     for (var i = 0; i < cloudParticles.length; i++) {
       var p = cloudParticles[i];
       p.angle += p.speed;
       var wobble = Math.sin(cloudTime * p.wobbleFreq + p.wobblePhase) * p.wobbleAmp;
-      var r = (p.orbitR + wobble) * scale;
+      var breathLocal = 1 + Math.sin(cloudTime * 0.015 + p.breathPhase) * 0.08;
+      var r = (p.orbitR + wobble) * scale * breath * breathLocal;
       var x = cx + Math.cos(p.angle) * r;
       var y = cy + Math.sin(p.angle) * r;
 
-      // Trail / soft glow
-      cCtx.save();
-      cCtx.globalAlpha = p.alpha * 0.3;
-      var trG = cCtx.createRadialGradient(x, y, 0, x, y, p.size * 3 * scale);
-      trG.addColorStop(0, 'rgba(' + p.rgb + ',0.3)');
-      trG.addColorStop(1, 'rgba(' + p.rgb + ',0)');
-      cCtx.fillStyle = trG;
-      cCtx.beginPath();
-      cCtx.arc(x, y, p.size * 3 * scale, 0, Math.PI * 2);
-      cCtx.fill();
-      cCtx.restore();
+      // Store trail position
+      p.trail.push({ x: x, y: y });
+      if (p.trail.length > 5) p.trail.shift();
 
-      // Core dot
-      cCtx.save();
-      cCtx.globalAlpha = p.alpha;
-      cCtx.fillStyle = 'rgba(' + p.rgb + ',1)';
+      // Draw wispy trail
+      if (p.trail.length > 1) {
+        for (var t = 0; t < p.trail.length - 1; t++) {
+          var tAlpha = (t / p.trail.length) * p.alpha * 0.25;
+          var tSize = p.size * (0.3 + (t / p.trail.length) * 0.5) * scale;
+          var tg = cCtx.createRadialGradient(
+            p.trail[t].x, p.trail[t].y, 0,
+            p.trail[t].x, p.trail[t].y, tSize
+          );
+          tg.addColorStop(0, 'rgba(' + p.rgb + ',' + (tAlpha * 0.6).toFixed(3) + ')');
+          tg.addColorStop(1, 'rgba(' + p.rgb + ',0)');
+          cCtx.fillStyle = tg;
+          cCtx.beginPath();
+          cCtx.arc(p.trail[t].x, p.trail[t].y, tSize, 0, Math.PI * 2);
+          cCtx.fill();
+        }
+      }
+
+      // Main soft nebulous blob (NO hard-edged dot)
+      var blobSize = p.size * scale;
+      var bg = cCtx.createRadialGradient(x, y, 0, x, y, blobSize);
+      bg.addColorStop(0, 'rgba(' + p.rgb + ',' + (p.alpha * 0.7).toFixed(3) + ')');
+      bg.addColorStop(0.35, 'rgba(' + p.rgb + ',' + (p.alpha * 0.35).toFixed(3) + ')');
+      bg.addColorStop(0.7, 'rgba(' + p.rgb + ',' + (p.alpha * 0.08).toFixed(3) + ')');
+      bg.addColorStop(1, 'rgba(' + p.rgb + ',0)');
+      cCtx.fillStyle = bg;
       cCtx.beginPath();
-      cCtx.arc(x, y, p.size * 0.5 * scale, 0, Math.PI * 2);
+      cCtx.arc(x, y, blobSize, 0, Math.PI * 2);
       cCtx.fill();
-      cCtx.restore();
+
+      // Extra outer haze for larger particles
+      if (p.size > 10) {
+        var hz = cCtx.createRadialGradient(x, y, blobSize * 0.5, x, y, blobSize * 1.8);
+        hz.addColorStop(0, 'rgba(' + p.rgb + ',' + (p.alpha * 0.08).toFixed(3) + ')');
+        hz.addColorStop(1, 'rgba(' + p.rgb + ',0)');
+        cCtx.fillStyle = hz;
+        cCtx.beginPath();
+        cCtx.arc(x, y, blobSize * 1.8, 0, Math.PI * 2);
+        cCtx.fill();
+      }
     }
 
     cloudAnimId = requestAnimationFrame(cloudLoop);

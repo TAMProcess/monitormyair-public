@@ -867,13 +867,21 @@ p { margin-bottom: var(--space-md); color: var(--color-text-secondary); }
   position: relative;
   z-index: 1;
   font-family: var(--font-display);
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  color: rgba(255,255,255,0.75);
+  font-size: var(--font-size-base);
+  font-weight: 700;
+  color: #fff;
   text-align: center;
   pointer-events: none;
-  text-shadow: 0 1px 8px rgba(0,0,0,0.6);
-  letter-spacing: 0.04em;
+  text-shadow:
+    0 0 12px rgba(0,229,255,0.6),
+    0 0 24px rgba(0,229,255,0.3),
+    0 1px 3px rgba(0,0,0,0.8);
+  letter-spacing: 0.06em;
+  animation: cloudLabelPulse 2.5s ease-in-out infinite;
+}
+@keyframes cloudLabelPulse {
+  0%, 100% { opacity: 0.85; text-shadow: 0 0 12px rgba(0,229,255,0.6), 0 0 24px rgba(0,229,255,0.3), 0 1px 3px rgba(0,0,0,0.8); }
+  50% { opacity: 1; text-shadow: 0 0 18px rgba(0,229,255,0.8), 0 0 36px rgba(0,229,255,0.4), 0 1px 3px rgba(0,0,0,0.8); }
 }
 .air-cloud-btn--hidden {
   display: none;
