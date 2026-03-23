@@ -861,7 +861,7 @@ p { margin-bottom: var(--space-md); color: var(--color-text-secondary); }
   display: flex;
   align-items: center;
   position: relative;
-  min-height: 480px;
+  min-height: 360px;
 }
 
 .air-vis__arrow {
@@ -892,7 +892,7 @@ p { margin-bottom: var(--space-md); color: var(--color-text-secondary); }
 .air-vis__jar {
   flex: 1;
   position: relative;
-  min-height: 480px;
+  min-height: 360px;
 }
 
 .air-vis__jar canvas {
@@ -1001,23 +1001,31 @@ p { margin-bottom: var(--space-md); color: var(--color-text-secondary); }
 .air-vis__cta strong { color: #fff; }
 
 @media (max-width: 768px) {
-  .air-vis__stage { min-height: 400px; }
-  .air-vis__jar { min-height: 400px; }
-  .air-vis__arrow { width: 36px; height: 36px; }
-  .air-vis__arrow--prev { left: var(--space-sm); }
-  .air-vis__arrow--next { right: var(--space-sm); }
-  .air-vis__captions { padding: var(--space-sm) var(--space-lg) var(--space-md); }
+  .air-vis__stage { min-height: 300px; }
+  .air-vis__jar { min-height: 300px; }
+  .air-vis__arrow { width: 34px; height: 34px; }
+  .air-vis__arrow svg { width: 18px; height: 18px; }
+  .air-vis__arrow--prev { left: var(--space-xs); }
+  .air-vis__arrow--next { right: var(--space-xs); }
+  .air-vis__captions { padding: var(--space-xs) var(--space-md) var(--space-sm); min-height: 80px; }
+  .air-vis__caption h3 { font-size: var(--font-size-base); }
+  .air-vis__caption p { font-size: var(--font-size-sm); line-height: 1.55; }
+  .air-vis__cta { padding: var(--space-md) var(--space-lg); }
+  .air-vis__cta p { font-size: var(--font-size-sm); }
 }
 
 @media (max-width: 640px) {
-  .air-vis__stage { min-height: 360px; }
-  .air-vis__jar { min-height: 360px; }
+  .air-vis__stage { min-height: 260px; }
+  .air-vis__jar { min-height: 260px; }
+  .air-vis__arrow { width: 30px; height: 30px; }
   .air-vis__cta {
     flex-direction: column;
     text-align: center;
+    padding: var(--space-sm) var(--space-md);
   }
-  .air-vis__dots { gap: var(--space-xs); }
-  .air-vis__dot { padding: 5px 12px; font-size: 11px; }
+  .air-vis__dots { gap: var(--space-xs); padding: var(--space-sm) 0 var(--space-xs); }
+  .air-vis__dot { padding: 4px 10px; font-size: 10px; }
+  .air-vis__captions { min-height: auto; padding: var(--space-xs) var(--space-sm); }
 }
 
 

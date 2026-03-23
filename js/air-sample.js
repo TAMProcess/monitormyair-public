@@ -38,11 +38,12 @@
   }
 
   function computeJar() {
-    var maxW = 300;
-    var jw = Math.min(W * 0.48, maxW);
-    var jh = H * 0.78;
+    var maxW = Math.min(260, W * 0.38);
+    var maxH = H * 0.76;
+    var jw = maxW;
+    var jh = Math.min(maxH, maxW * 1.6);
     var cx = W / 2;
-    var cy = H / 2 + 8;
+    var cy = H / 2 + 4;
 
     var bodyW = jw;
     var bodyH = jh * 0.80;
