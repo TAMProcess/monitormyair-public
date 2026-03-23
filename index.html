@@ -274,6 +274,29 @@
   </section>
 
 
+  <!-- ===== Interactive House Cutaway ===== -->
+  <section class="section house-section" id="house-cutaway" style="background: linear-gradient(180deg, var(--color-bg) 0%, rgba(137,207,240,0.04) 50%, var(--color-bg) 100%);">
+    <div class="container">
+      <div class="section-header reveal">
+        <span class="section-header__label">Interactive Visual</span>
+        <h2 class="section-header__title">Where Problems Hide in Your Home</h2>
+        <p class="section-header__desc">Mold, moisture, and air quality issues rarely happen in obvious places. Tap a room to see what can go wrong — and what to look for.</p>
+      </div>
+
+      <div class="house-vis reveal">
+        <div class="house-vis__stage">
+          <canvas id="houseCutCanvas"></canvas>
+        </div>
+        <div class="house-vis__info" id="houseInfo">
+          <div class="house-vis__info-default">
+            <p>Tap any highlighted zone to learn what hides there.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
   <!-- ===== Health & Symptoms ===== -->
   <section class="section" id="health">
     <div class="container">
@@ -544,5 +567,6 @@
 
   <script src="js/main.js"></script>
   <script src="js/air-sample.js"></script>
+  <script src="js/house-cutaway.js"></script>
 </body>
 </html>

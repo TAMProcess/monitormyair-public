@@ -1099,6 +1099,85 @@ p { margin-bottom: var(--space-md); color: var(--color-text-secondary); }
 }
 
 
+/* --- Interactive House Cutaway --- */
+.house-vis {
+  background:
+    linear-gradient(160deg, rgba(8,16,35,0.94) 0%, rgba(12,22,45,0.96) 50%, rgba(8,16,35,0.94) 100%);
+  border-radius: var(--radius-xl);
+  border: 1.5px solid rgba(255,255,255,0.08);
+  overflow: hidden;
+}
+
+.house-vis__stage {
+  position: relative;
+  width: 100%;
+  min-height: 480px;
+}
+
+.house-vis__stage canvas {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  cursor: pointer;
+}
+
+.house-vis__info {
+  padding: var(--space-md) var(--space-2xl) var(--space-lg);
+  text-align: center;
+  min-height: 80px;
+}
+
+.house-vis__info-default p {
+  color: rgba(255,255,255,0.40);
+  font-size: var(--font-size-sm);
+  margin: 0;
+}
+
+.house-vis__info-detail {
+  animation: airVisFade 0.35s ease;
+}
+
+.house-vis__info-detail h3 {
+  font-family: var(--font-display);
+  font-size: var(--font-size-lg);
+  color: #fff;
+  font-weight: 700;
+  margin: 0 0 var(--space-xs);
+}
+
+.house-vis__info-detail p {
+  font-size: var(--font-size-base);
+  color: rgba(255,255,255,0.60);
+  line-height: 1.7;
+  margin: 0 0 var(--space-sm);
+  max-width: 700px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.house-vis__info-detail a {
+  color: var(--color-neon-cyan);
+  font-weight: 600;
+  text-decoration: none;
+  font-size: var(--font-size-sm);
+}
+.house-vis__info-detail a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 768px) {
+  .house-vis__stage { min-height: 380px; }
+  .house-vis__info { padding: var(--space-sm) var(--space-md); }
+  .house-vis__info-detail h3 { font-size: var(--font-size-base); }
+  .house-vis__info-detail p { font-size: var(--font-size-sm); line-height: 1.55; }
+}
+
+@media (max-width: 640px) {
+  .house-vis__stage { min-height: 300px; }
+  .house-vis__info { padding: var(--space-xs) var(--space-sm); min-height: 60px; }
+}
+
+
 /* --- Situation Finder (Interactive Quiz on Homepage) --- */
 .finder {
   background: linear-gradient(135deg, rgba(137, 207, 240, 0.08), rgba(0, 198, 215, 0.05));
