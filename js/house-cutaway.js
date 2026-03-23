@@ -1,1382 +1,1399 @@
-/* ============================================================
-   "Where Problems Hide in Your Home" — 3D Isometric House Cutaway
-   Canvas-rendered isometric cross-section with depth, lighting,
-   material textures, ambient occlusion, and clickable hotspot zones.
-   ============================================================ */
-(function () {
-  'use strict';
-
-  var canvas = document.getElementById('houseCutCanvas');
-  if (!canvas) return;
-  var ctx = canvas.getContext('2d');
-  var wrap = canvas.parentElement;
-  var infoEl = document.getElementById('houseInfo');
-
-  var W, H, dpr;
-  var activeZone = null;
-  var hoverZone = null;
-  var tick = 0;
-
-  // Isometric depth offset (pixels the "back wall" is shifted up-right)
-  var D = 0; // computed on resize
-  var ANGLE = 0.46; // ~26° iso tilt
-
-  /* ===================== ZONE DATA ===================== */
-  var ZONE_DATA = {
-    attic: {
-      title: 'Attic & Roof Line',
-      desc: 'Roof leaks, poor ventilation, and temperature differentials create condensation that feeds hidden mold on sheathing and insulation. Most homeowners never look up here — until it\'s too late.',
-      link: 'pages/hidden-mold.html',
-      linkText: 'Learn About Hidden Mold \u2192',
-      color: [255, 180, 60]
-    },
-    bathroom: {
-      title: 'Bathroom',
-      desc: 'The #1 mold hotspot. Shower steam, poor exhaust fans, and deteriorating caulk allow moisture behind walls. Surface mold you can see often indicates deeper problems you can\'t.',
-      link: 'pages/mold-in-bathroom.html',
-      linkText: 'Bathroom Mold Guide \u2192',
-      color: [60, 200, 180]
-    },
-    hvac: {
-      title: 'HVAC System',
-      desc: 'Your air handler and ductwork push air to every room. If mold colonizes the coil, drain pan, or ducts, it spreads spores throughout the entire house with every cycle.',
-      link: 'pages/mold-in-hvac.html',
-      linkText: 'HVAC Mold Guide \u2192',
-      color: [100, 160, 255]
-    },
-    kitchen: {
-      title: 'Kitchen & Plumbing',
-      desc: 'Under-sink leaks, dishwasher connections, and refrigerator lines are silent water sources. Mold thrives in dark, enclosed cabinet spaces where leaks go unnoticed for months.',
-      link: 'pages/hidden-mold.html',
-      linkText: 'Hidden Mold Signs \u2192',
-      color: [200, 120, 255]
-    },
-    walls: {
-      title: 'Inside the Walls',
-      desc: 'Plumbing leaks, condensation on cold surfaces, and wind-driven rain can saturate wall cavities. Mold grows on the back side of drywall — invisible until significant damage occurs.',
-      link: 'pages/hidden-mold.html',
-      linkText: 'Detecting Hidden Mold \u2192',
-      color: [255, 100, 100]
-    },
-    crawlspace: {
-      title: 'Crawlspace & Foundation',
-      desc: 'Ground moisture, poor vapor barriers, and standing water make crawlspaces the most consistently humid area. Mold here sends spores up through the floor system into living spaces via the stack effect.',
-      link: 'pages/mold-in-crawlspace.html',
-      linkText: 'Crawlspace Mold Guide \u2192',
-      color: [120, 200, 80]
-    }
-  };
-
-  // ---- Geometry cache ----
-  var G = {};          // house geometry
-  var zones = [];      // hit-test rects (screen-space)
-  var particles = [];  // ambient floating particles
-
-  /* ===================== RESIZE ===================== */
-  function resize() {
-    dpr = window.devicePixelRatio || 1;
-    var rect = wrap.getBoundingClientRect();
-    W = rect.width;
-    H = rect.height;
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
-    canvas.style.width = W + 'px';
-    canvas.style.height = H + 'px';
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    D = Math.min(W, H) * 0.09;
-    computeGeometry();
-    initParticles();
-  }
-
-  /* ===================== COMPUTE GEOMETRY ===================== */
-  function computeGeometry() {
-    var pad = Math.max(20, W * 0.05);
-    // leave room for depth offset top-right
-    var usableW = W - pad * 2 - D;
-    var usableH = H - pad * 2 - D * 0.6;
-    var left = pad;
-    var top = pad + D * 0.55;
-
-    // Vertical proportions
-    var roofH   = usableH * 0.16;
-    var atticH  = usableH * 0.09;
-    var upperH  = usableH * 0.30;
-    var lowerH  = usableH * 0.28;
-    var crawlH  = usableH * 0.11;
-    var floorTH = usableH * 0.015;
-    var chimneyH = roofH * 0.6;
-
-    var roofTop   = top;
-    var atticTop  = top + roofH;
-    var upperTop  = atticTop + atticH;
-    var lowerTop  = upperTop + upperH;
-    var crawlTop  = lowerTop + lowerH;
-    var bot       = crawlTop + crawlH;
-
-    // Exterior walls
-    var wallL = left;
-    var wallR = left + usableW;
-    var wallInW = wallR - wallL;
-
-    // Dividers
-    var upperDivX = wallL + wallInW * 0.40;
-    var lowerDivX = wallL + wallInW * 0.48;
-
-    // Roof peak
-    var peakX = wallL + wallInW * 0.50;
-    var peakY = roofTop;
-    var roofOverhang = wallInW * 0.04;
-
-    G = {
-      pad: pad, left: left, top: top,
-      wallL: wallL, wallR: wallR, wallInW: wallInW,
-      roofH: roofH, atticH: atticH, upperH: upperH, lowerH: lowerH, crawlH: crawlH,
-      floorTH: floorTH, chimneyH: chimneyH,
-      roofTop: roofTop, atticTop: atticTop, upperTop: upperTop,
-      lowerTop: lowerTop, crawlTop: crawlTop, bot: bot,
-      peakX: peakX, peakY: peakY, roofOverhang: roofOverhang,
-      upperDivX: upperDivX, lowerDivX: lowerDivX,
-      usableW: usableW, usableH: bot - top
-    };
-
-    // Hit-test zones (front face rects)
-    zones = [
-      { id: 'attic',      x: wallL, y: atticTop,  w: wallInW,                h: atticH },
-      { id: 'bathroom',   x: wallL, y: upperTop,  w: upperDivX - wallL,      h: upperH },
-      { id: 'walls',      x: upperDivX, y: upperTop, w: wallR - upperDivX,   h: upperH },
-      { id: 'kitchen',    x: wallL, y: lowerTop,  w: lowerDivX - wallL,      h: lowerH },
-      { id: 'hvac',       x: lowerDivX, y: lowerTop, w: wallR - lowerDivX,   h: lowerH },
-      { id: 'crawlspace', x: wallL, y: crawlTop,  w: wallInW,                h: crawlH }
-    ];
-  }
-
-  /* ===================== PARTICLES ===================== */
-  function initParticles() {
-    particles = [];
-    var count = Math.floor(W * H / 6000);
-    for (var i = 0; i < count; i++) {
-      particles.push({
-        x: Math.random() * W,
-        y: Math.random() * H,
-        r: 0.4 + Math.random() * 1.2,
-        vx: (Math.random() - 0.5) * 0.15,
-        vy: -0.05 - Math.random() * 0.12,
-        a: 0.03 + Math.random() * 0.06,
-        phase: Math.random() * Math.PI * 2
-      });
-    }
-  }
-
-  function updateParticles() {
-    for (var i = 0; i < particles.length; i++) {
-      var p = particles[i];
-      p.x += p.vx + Math.sin(tick * 0.008 + p.phase) * 0.1;
-      p.y += p.vy;
-      if (p.y < -10) { p.y = H + 5; p.x = Math.random() * W; }
-      if (p.x < -10) p.x = W + 5;
-      if (p.x > W + 10) p.x = -5;
-    }
-  }
-
-  function drawParticles() {
-    for (var i = 0; i < particles.length; i++) {
-      var p = particles[i];
-      var a = p.a * (0.7 + Math.sin(tick * 0.015 + p.phase) * 0.3);
-      ctx.fillStyle = 'rgba(137,207,240,' + a.toFixed(3) + ')';
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  /* ===================== ISOMETRIC HELPERS ===================== */
-  // Offset a point to its "back" position (depth)
-  function bk(x, y) { return [x + D, y - D * ANGLE]; }
-
-  // Draw a 3D box front-face, top-face, right-face
-  function box3d(x, y, w, h, frontColor, topColor, sideColor) {
-    var br = bk(x + w, y);
-    var brt = bk(x + w, y);
-    // Front face
-    ctx.fillStyle = frontColor;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + w, y);
-    ctx.lineTo(x + w, y + h);
-    ctx.lineTo(x, y + h);
-    ctx.closePath();
-    ctx.fill();
-
-    // Top face
-    var btl = bk(x, y);
-    var btr = bk(x + w, y);
-    ctx.fillStyle = topColor;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(btl[0], btl[1]);
-    ctx.lineTo(btr[0], btr[1]);
-    ctx.lineTo(x + w, y);
-    ctx.closePath();
-    ctx.fill();
-
-    // Right face
-    var brb = bk(x + w, y + h);
-    ctx.fillStyle = sideColor;
-    ctx.beginPath();
-    ctx.moveTo(x + w, y);
-    ctx.lineTo(btr[0], btr[1]);
-    ctx.lineTo(brb[0], brb[1]);
-    ctx.lineTo(x + w, y + h);
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  // Draw edges on a 3D box
-  function boxEdges(x, y, w, h, color, lineW) {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = lineW || 1;
-    var btl = bk(x, y);
-    var btr = bk(x + w, y);
-    var brb = bk(x + w, y + h);
-    // Front
-    ctx.beginPath();
-    ctx.moveTo(x, y); ctx.lineTo(x + w, y);
-    ctx.lineTo(x + w, y + h); ctx.lineTo(x, y + h); ctx.closePath();
-    ctx.stroke();
-    // Top
-    ctx.beginPath();
-    ctx.moveTo(x, y); ctx.lineTo(btl[0], btl[1]);
-    ctx.lineTo(btr[0], btr[1]); ctx.lineTo(x + w, y); ctx.closePath();
-    ctx.stroke();
-    // Right side
-    ctx.beginPath();
-    ctx.moveTo(x + w, y); ctx.lineTo(btr[0], btr[1]);
-    ctx.lineTo(brb[0], brb[1]); ctx.lineTo(x + w, y + h); ctx.closePath();
-    ctx.stroke();
-  }
-
-  // AO (ambient occlusion shadow) at inside corners
-  function aoCorner(x, y, w, dir, strength) {
-    var g;
-    if (dir === 'down') {
-      g = ctx.createLinearGradient(x, y, x, y + w);
-      g.addColorStop(0, 'rgba(0,0,0,' + (strength || 0.25) + ')');
-      g.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = g;
-      ctx.fillRect(x, y, 9999, w);
-    } else if (dir === 'right') {
-      g = ctx.createLinearGradient(x, y, x + w, y);
-      g.addColorStop(0, 'rgba(0,0,0,' + (strength || 0.2) + ')');
-      g.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = g;
-      ctx.fillRect(x, y, w, 9999);
-    }
-  }
-
-  /* ===================== MATERIAL TEXTURES ===================== */
-  function drawWoodFloor(x, y, w, h, alpha) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(x, y, w, h);
-    ctx.clip();
-    var plankW = 18;
-    var a = alpha || 0.07;
-    for (var px = x; px < x + w; px += plankW) {
-      ctx.strokeStyle = 'rgba(160,130,90,' + a + ')';
-      ctx.lineWidth = 0.5;
-      ctx.beginPath();
-      ctx.moveTo(px, y);
-      ctx.lineTo(px, y + h);
-      ctx.stroke();
-      // grain lines
-      for (var gy = y + 3; gy < y + h; gy += 6 + Math.random() * 8) {
-        ctx.strokeStyle = 'rgba(140,110,70,' + (a * 0.5) + ')';
-        ctx.lineWidth = 0.3;
-        ctx.beginPath();
-        ctx.moveTo(px + 2, gy);
-        ctx.quadraticCurveTo(px + plankW * 0.5, gy + (Math.random() - 0.5) * 3, px + plankW - 2, gy);
-        ctx.stroke();
-      }
-    }
-    ctx.restore();
-  }
-
-  function drawBrickPattern(x, y, w, h, alpha) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(x, y, w, h);
-    ctx.clip();
-    var bw = 14, bh = 7;
-    var a = alpha || 0.08;
-    var row = 0;
-    for (var by = y; by < y + h; by += bh) {
-      var offset = (row % 2 === 0) ? 0 : bw * 0.5;
-      for (var bx = x - bw + offset; bx < x + w; bx += bw) {
-        ctx.strokeStyle = 'rgba(140,100,80,' + a + ')';
-        ctx.lineWidth = 0.4;
-        ctx.strokeRect(bx, by, bw - 1, bh - 1);
-      }
-      row++;
-    }
-    ctx.restore();
-  }
-
-  function drawTilePattern(x, y, w, h, alpha) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(x, y, w, h);
-    ctx.clip();
-    var tw = 12;
-    var a = alpha || 0.06;
-    for (var tx = x; tx < x + w; tx += tw) {
-      for (var ty = y; ty < y + h; ty += tw) {
-        ctx.strokeStyle = 'rgba(120,180,190,' + a + ')';
-        ctx.lineWidth = 0.4;
-        ctx.strokeRect(tx, ty, tw - 1, tw - 1);
-      }
-    }
-    ctx.restore();
-  }
-
-  function drawConcreteTexture(x, y, w, h, alpha) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(x, y, w, h);
-    ctx.clip();
-    var a = alpha || 0.04;
-    // Random speckle
-    var seed = 42;
-    for (var i = 0; i < w * h * 0.02; i++) {
-      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-      var sx = x + (seed % w);
-      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-      var sy = y + (seed % h);
-      ctx.fillStyle = 'rgba(180,175,170,' + a + ')';
-      ctx.fillRect(sx, sy, 1, 1);
-    }
-    ctx.restore();
-  }
-
-  /* ===================== DRAW 3D HOUSE ===================== */
-  function drawHouse() {
-    var g = G;
-    var wallT = Math.max(8, g.wallInW * 0.025); // wall thickness
-
-    // ============ GROUND PLANE (isometric) ============
-    var groundY = g.bot + 4;
-    ctx.save();
-    var gp1 = [g.wallL - 20, groundY];
-    var gp2 = bk(g.wallL - 20, groundY);
-    var gp3 = bk(g.wallR + 20, groundY);
-    var gp4 = [g.wallR + 20, groundY];
-    var gg = ctx.createLinearGradient(0, groundY - 10, 0, groundY + 40);
-    gg.addColorStop(0, 'rgba(45,60,35,0.35)');
-    gg.addColorStop(1, 'rgba(30,42,25,0)');
-    ctx.fillStyle = gg;
-    ctx.beginPath();
-    ctx.moveTo(gp1[0], gp1[1]);
-    ctx.lineTo(gp2[0], gp2[1]);
-    ctx.lineTo(gp3[0], gp3[1]);
-    ctx.lineTo(gp4[0], gp4[1]);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
-
-    // ============ FOUNDATION / CRAWLSPACE (3D) ============
-    box3d(g.wallL, g.crawlTop, g.wallInW, g.crawlH,
-      'rgba(55,50,48,0.92)',    // front
-      'rgba(72,66,62,0.7)',     // top
-      'rgba(40,36,34,0.95)');   // right side
-    drawConcreteTexture(g.wallL, g.crawlTop, g.wallInW, g.crawlH, 0.06);
-    drawBrickPattern(g.wallL, g.crawlTop, g.wallInW, g.crawlH, 0.04);
-    boxEdges(g.wallL, g.crawlTop, g.wallInW, g.crawlH, 'rgba(90,82,75,0.4)', 1);
-
-    // Inner crawl void
-    var ci = 6;
-    ctx.fillStyle = 'rgba(15,12,10,0.9)';
-    ctx.fillRect(g.wallL + ci, g.crawlTop + ci, g.wallInW - ci * 2, g.crawlH - ci);
-    // Dirt / moisture at bottom
-    var dirtG = ctx.createLinearGradient(0, g.bot - 15, 0, g.bot - ci);
-    dirtG.addColorStop(0, 'rgba(60,50,40,0)');
-    dirtG.addColorStop(1, 'rgba(60,50,40,0.35)');
-    ctx.fillStyle = dirtG;
-    ctx.fillRect(g.wallL + ci, g.bot - 20, g.wallInW - ci * 2, 20);
-    // Moisture droplets
-    for (var md = 0; md < 10; md++) {
-      var mdx = g.wallL + ci + 15 + md * ((g.wallInW - ci * 2 - 30) / 9);
-      var mdy = g.bot - 10 + Math.sin(tick * 0.018 + md * 0.8) * 3;
-      var mda = 0.10 + Math.sin(tick * 0.025 + md * 1.3) * 0.06;
-      ctx.fillStyle = 'rgba(80,160,220,' + mda.toFixed(3) + ')';
-      ctx.beginPath();
-      ctx.arc(mdx, mdy, 2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    // Vapor barrier
-    ctx.save();
-    ctx.setLineDash([5, 3]);
-    ctx.strokeStyle = 'rgba(120,200,80,0.18)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(g.wallL + ci + 8, g.bot - ci - 3);
-    ctx.lineTo(g.wallR - ci - 8, g.bot - ci - 3);
-    ctx.stroke();
-    ctx.restore();
-    // Foundation support piers
-    var pierCount = 4;
-    for (var pi = 0; pi < pierCount; pi++) {
-      var piX = g.wallL + ci + 20 + pi * ((g.wallInW - ci * 2 - 40) / (pierCount - 1));
-      ctx.fillStyle = 'rgba(75,68,62,0.6)';
-      ctx.fillRect(piX - 3, g.crawlTop + ci + 5, 6, g.crawlH - ci - 5);
-    }
-
-    // ============ LOWER FLOOR SLAB (3D) ============
-    var slabH = g.floorTH + 4;
-    box3d(g.wallL - 2, g.crawlTop - slabH, g.wallInW + 4, slabH,
-      'rgba(85,78,72,0.9)',
-      'rgba(110,100,92,0.6)',
-      'rgba(65,58,52,0.95)');
-    boxEdges(g.wallL - 2, g.crawlTop - slabH, g.wallInW + 4, slabH, 'rgba(120,110,100,0.25)', 0.8);
-
-    // ============ LOWER FLOOR ROOMS (3D boxes) ============
-    // Kitchen (left)
-    var kitW = g.lowerDivX - g.wallL;
-    box3d(g.wallL, g.lowerTop, kitW, g.lowerH,
-      'rgba(42,38,52,0.92)',
-      'rgba(55,50,65,0.5)',
-      'rgba(32,28,40,0.92)');
-    drawWoodFloor(g.wallL, g.lowerTop + g.lowerH * 0.85, kitW, g.lowerH * 0.15, 0.08);
-    // AO at top and left
-    ctx.save();
-    ctx.beginPath(); ctx.rect(g.wallL, g.lowerTop, kitW, g.lowerH); ctx.clip();
-    aoCorner(g.wallL, g.lowerTop, 12, 'down', 0.15);
-    aoCorner(g.wallL, g.lowerTop, 10, 'right', 0.12);
-    ctx.restore();
-
-    // HVAC room (right)
-    var hvacW = g.wallR - g.lowerDivX;
-    box3d(g.lowerDivX, g.lowerTop, hvacW, g.lowerH,
-      'rgba(36,40,55,0.92)',
-      'rgba(48,52,68,0.5)',
-      'rgba(28,32,45,0.92)');
-    // AO
-    ctx.save();
-    ctx.beginPath(); ctx.rect(g.lowerDivX, g.lowerTop, hvacW, g.lowerH); ctx.clip();
-    aoCorner(g.lowerDivX, g.lowerTop, 12, 'down', 0.15);
-    aoCorner(g.lowerDivX, g.lowerTop, 10, 'right', 0.12);
-    ctx.restore();
-
-    // Divider wall (3D)
-    var divWallW = wallT * 0.7;
-    box3d(g.lowerDivX - divWallW / 2, g.lowerTop, divWallW, g.lowerH,
-      'rgba(95,88,80,0.8)',
-      'rgba(115,108,98,0.5)',
-      'rgba(75,68,60,0.85)');
-
-    // ---- Kitchen furniture ----
-    drawKitchen3d(g.wallL, g.lowerTop, kitW, g.lowerH);
-
-    // ---- HVAC unit ----
-    drawHVAC3d(g.lowerDivX, g.lowerTop, hvacW, g.lowerH);
-
-    // ============ UPPER FLOOR SLAB (3D) ============
-    box3d(g.wallL - 2, g.lowerTop - slabH, g.wallInW + 4, slabH,
-      'rgba(85,78,72,0.9)',
-      'rgba(110,100,92,0.6)',
-      'rgba(65,58,52,0.95)');
-    boxEdges(g.wallL - 2, g.lowerTop - slabH, g.wallInW + 4, slabH, 'rgba(120,110,100,0.25)', 0.8);
-
-    // ============ UPPER FLOOR ROOMS (3D) ============
-    // Bathroom (left)
-    var bathW = g.upperDivX - g.wallL;
-    box3d(g.wallL, g.upperTop, bathW, g.upperH,
-      'rgba(40,45,58,0.92)',
-      'rgba(52,58,72,0.5)',
-      'rgba(30,34,46,0.92)');
-    drawTilePattern(g.wallL, g.upperTop, bathW, g.upperH, 0.05);
-    // AO
-    ctx.save();
-    ctx.beginPath(); ctx.rect(g.wallL, g.upperTop, bathW, g.upperH); ctx.clip();
-    aoCorner(g.wallL, g.upperTop, 14, 'down', 0.18);
-    aoCorner(g.wallL, g.upperTop, 10, 'right', 0.12);
-    ctx.restore();
-
-    // Bedroom / Walls (right)
-    var bedrW = g.wallR - g.upperDivX;
-    box3d(g.upperDivX, g.upperTop, bedrW, g.upperH,
-      'rgba(38,35,50,0.92)',
-      'rgba(50,46,64,0.5)',
-      'rgba(28,25,38,0.92)');
-    drawWoodFloor(g.upperDivX, g.upperTop + g.upperH * 0.82, bedrW, g.upperH * 0.18, 0.07);
-    // AO
-    ctx.save();
-    ctx.beginPath(); ctx.rect(g.upperDivX, g.upperTop, bedrW, g.upperH); ctx.clip();
-    aoCorner(g.upperDivX, g.upperTop, 14, 'down', 0.18);
-    aoCorner(g.upperDivX, g.upperTop, 10, 'right', 0.12);
-    ctx.restore();
-
-    // Upper divider (3D)
-    box3d(g.upperDivX - divWallW / 2, g.upperTop, divWallW, g.upperH,
-      'rgba(95,88,80,0.8)',
-      'rgba(115,108,98,0.5)',
-      'rgba(75,68,60,0.85)');
-
-    // ---- Bathroom fixtures ----
-    drawBathroom3d(g.wallL, g.upperTop, bathW, g.upperH);
-
-    // ---- Bedroom fixtures ----
-    drawBedroom3d(g.upperDivX, g.upperTop, bedrW, g.upperH);
-
-    // ---- Wall moisture inside cavity (right exterior wall) ----
-    drawWallMoisture(g.wallR - wallT, g.upperTop, wallT, g.upperH);
-
-    // ---- Ductwork (between floors) ----
-    drawDucts(g);
-
-    // ============ EXTERIOR WALLS (3D thick) ============
-    // Left wall
-    box3d(g.wallL - wallT, g.atticTop, wallT, g.bot - g.atticTop,
-      'rgba(110,100,88,0.85)',
-      'rgba(135,125,112,0.5)',
-      'rgba(90,80,68,0.9)');
-    drawBrickPattern(g.wallL - wallT, g.atticTop, wallT, g.bot - g.atticTop, 0.06);
-
-    // Right wall
-    box3d(g.wallR, g.atticTop, wallT, g.bot - g.atticTop,
-      'rgba(110,100,88,0.85)',
-      'rgba(135,125,112,0.5)',
-      'rgba(90,80,68,0.9)');
-    drawBrickPattern(g.wallR, g.atticTop, wallT, g.bot - g.atticTop, 0.06);
-
-    // ============ WINDOWS (3D recessed) ============
-    drawWindow3d(g.upperDivX + bedrW * 0.60, g.upperTop + g.upperH * 0.15, 30, 40);
-    drawWindow3d(g.wallL + kitW * 0.65, g.lowerTop + g.lowerH * 0.12, 28, 36);
-
-    // ============ ATTIC (3D) ============
-    box3d(g.wallL, g.atticTop, g.wallInW, g.atticH,
-      'rgba(50,45,42,0.88)',
-      'rgba(65,58,54,0.5)',
-      'rgba(38,34,32,0.92)');
-    boxEdges(g.wallL, g.atticTop, g.wallInW, g.atticH, 'rgba(80,72,65,0.3)', 0.6);
-
-    // Insulation (fluffy zigzag with thickness)
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(g.wallL + 3, g.atticTop + g.atticH - 16, g.wallInW - 6, 14);
-    ctx.clip();
-    for (var il = 0; il < 2; il++) {
-      var insY = g.atticTop + g.atticH - 6 - il * 5;
-      ctx.strokeStyle = 'rgba(255,210,120,' + (0.14 - il * 0.04) + ')';
-      ctx.lineWidth = 2.5 - il * 0.8;
-      ctx.beginPath();
-      for (var iz = 0; iz < 25; iz++) {
-        var izx = g.wallL + 5 + iz * ((g.wallInW - 10) / 24);
-        ctx.lineTo(izx, insY + (iz % 2 === 0 ? -4 : 4) + il * 2);
-      }
-      ctx.stroke();
-    }
-    ctx.restore();
-
-    // Rafters
-    ctx.strokeStyle = 'rgba(120,100,75,0.12)';
-    ctx.lineWidth = 2;
-    var rafterCount = 6;
-    for (var ri = 0; ri < rafterCount; ri++) {
-      var rx = g.wallL + 10 + ri * ((g.wallInW - 20) / (rafterCount - 1));
-      ctx.beginPath();
-      ctx.moveTo(rx, g.atticTop + 3);
-      ctx.lineTo(rx, g.atticTop + g.atticH - 3);
-      ctx.stroke();
-    }
-
-    // ============ ROOF (3D with depth) ============
-    drawRoof3d(g);
-
-    // ============ CHIMNEY (3D) ============
-    var chimX = g.wallR - g.wallInW * 0.22;
-    var chimW = 16;
-    box3d(chimX, g.peakY - g.chimneyH * 0.4, chimW, g.chimneyH,
-      'rgba(100,80,70,0.85)',
-      'rgba(130,108,95,0.6)',
-      'rgba(75,58,50,0.9)');
-    drawBrickPattern(chimX, g.peakY - g.chimneyH * 0.4, chimW, g.chimneyH, 0.10);
-    boxEdges(chimX, g.peakY - g.chimneyH * 0.4, chimW, g.chimneyH, 'rgba(130,110,95,0.35)', 0.8);
-
-    // ============ GLOBAL LIGHTING OVERLAY ============
-    // Top-left light source gradient
-    var lightG = ctx.createRadialGradient(
-      g.wallL, g.peakY, 0,
-      g.wallL + g.wallInW * 0.5, g.bot, g.wallInW * 0.8
-    );
-    lightG.addColorStop(0, 'rgba(255,240,220,0.04)');
-    lightG.addColorStop(0.5, 'rgba(0,0,0,0)');
-    lightG.addColorStop(1, 'rgba(0,0,0,0.06)');
-    ctx.fillStyle = lightG;
-    ctx.fillRect(g.wallL - wallT, g.peakY - g.chimneyH, g.wallInW + wallT * 2 + D, g.bot - g.peakY + g.chimneyH + 20);
-
-    // ============ ZONE HIGHLIGHTS ============
-    drawZoneHighlights();
-  }
-
-  /* ===================== 3D ROOF ===================== */
-  function drawRoof3d(g) {
-    var oh = g.roofOverhang;
-    var peakX = g.peakX;
-    var peakY = g.peakY;
-    var baseY = g.atticTop;
-    var leftX = g.wallL - oh;
-    var rightX = g.wallR + oh;
-
-    // Back peak and base
-    var bPeak = bk(peakX, peakY);
-    var bLeft = bk(leftX, baseY);
-    var bRight = bk(rightX, baseY);
-
-    // Right roof slope — back face (visible)
-    ctx.fillStyle = 'rgba(82,70,62,0.7)';
-    ctx.beginPath();
-    ctx.moveTo(peakX, peakY);
-    ctx.lineTo(bPeak[0], bPeak[1]);
-    ctx.lineTo(bRight[0], bRight[1]);
-    ctx.lineTo(rightX, baseY);
-    ctx.closePath();
-    ctx.fill();
-
-    // Left roof slope — back face (partially visible)
-    ctx.fillStyle = 'rgba(75,64,56,0.5)';
-    ctx.beginPath();
-    ctx.moveTo(peakX, peakY);
-    ctx.lineTo(bPeak[0], bPeak[1]);
-    ctx.lineTo(bLeft[0], bLeft[1]);
-    ctx.lineTo(leftX, baseY);
-    ctx.closePath();
-    ctx.fill();
-
-    // Right roof top surface
-    ctx.fillStyle = 'rgba(95,82,72,0.85)';
-    ctx.beginPath();
-    ctx.moveTo(peakX, peakY);
-    ctx.lineTo(bPeak[0], bPeak[1]);
-    ctx.lineTo(bRight[0], bRight[1]);
-    ctx.lineTo(rightX, baseY);
-    ctx.closePath();
-    ctx.fill();
-
-    // Front face — left slope
-    var roofFrontG = ctx.createLinearGradient(leftX, baseY, peakX, peakY);
-    roofFrontG.addColorStop(0, 'rgba(85,72,64,0.92)');
-    roofFrontG.addColorStop(1, 'rgba(100,85,75,0.92)');
-    ctx.fillStyle = roofFrontG;
-    ctx.beginPath();
-    ctx.moveTo(peakX, peakY);
-    ctx.lineTo(leftX, baseY);
-    ctx.lineTo(peakX, baseY); // mid bottom
-    ctx.closePath();
-    ctx.fill();
-
-    // Front face — right slope
-    var roofFrontG2 = ctx.createLinearGradient(rightX, baseY, peakX, peakY);
-    roofFrontG2.addColorStop(0, 'rgba(75,64,56,0.92)');
-    roofFrontG2.addColorStop(1, 'rgba(90,78,68,0.92)');
-    ctx.fillStyle = roofFrontG2;
-    ctx.beginPath();
-    ctx.moveTo(peakX, peakY);
-    ctx.lineTo(rightX, baseY);
-    ctx.lineTo(peakX, baseY);
-    ctx.closePath();
-    ctx.fill();
-
-    // Shingle lines on front face
-    ctx.save();
-    var shingleRows = 7;
-    for (var sr = 1; sr <= shingleRows; sr++) {
-      var t = sr / (shingleRows + 1);
-      var sy = peakY + (baseY - peakY) * t;
-      var sxL = peakX + (leftX - peakX) * t;
-      var sxR = peakX + (rightX - peakX) * t;
-      ctx.strokeStyle = 'rgba(120,105,90,' + (0.12 + t * 0.08) + ')';
-      ctx.lineWidth = 0.6;
-      ctx.beginPath();
-      ctx.moveTo(sxL, sy);
-      ctx.lineTo(sxR, sy);
-      ctx.stroke();
-      // Vertical shingle offsets
-      var segW = (sxR - sxL) / 8;
-      var offsetRow = sr % 2 === 0 ? segW * 0.5 : 0;
-      for (var sv = 0; sv < 8; sv++) {
-        var svx = sxL + sv * segW + offsetRow;
-        if (svx > sxL && svx < sxR) {
-          var prevSy = peakY + (baseY - peakY) * ((sr - 1) / (shingleRows + 1));
-          ctx.beginPath();
-          ctx.moveTo(svx, sy);
-          ctx.lineTo(svx, prevSy);
-          ctx.stroke();
-        }
-      }
-    }
-    ctx.restore();
-
-    // Ridge cap
-    ctx.strokeStyle = 'rgba(140,125,110,0.5)';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(peakX, peakY);
-    ctx.lineTo(bPeak[0], bPeak[1]);
-    ctx.stroke();
-
-    // Roof outline edges
-    ctx.strokeStyle = 'rgba(150,135,118,0.4)';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(leftX, baseY);
-    ctx.lineTo(peakX, peakY);
-    ctx.lineTo(rightX, baseY);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(bLeft[0], bLeft[1]);
-    ctx.lineTo(bPeak[0], bPeak[1]);
-    ctx.lineTo(bRight[0], bRight[1]);
-    ctx.stroke();
-    // Eave lines
-    ctx.beginPath();
-    ctx.moveTo(leftX, baseY);
-    ctx.lineTo(bLeft[0], bLeft[1]);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(rightX, baseY);
-    ctx.lineTo(bRight[0], bRight[1]);
-    ctx.stroke();
-
-    // Fascia shadow (under eave, front)
-    var fasciaG = ctx.createLinearGradient(0, baseY, 0, baseY + 6);
-    fasciaG.addColorStop(0, 'rgba(0,0,0,0.15)');
-    fasciaG.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = fasciaG;
-    ctx.fillRect(leftX, baseY, rightX - leftX, 6);
-  }
-
-  /* ===================== 3D WINDOW ===================== */
-  function drawWindow3d(cx, y, w, h) {
-    var recess = 4;
-    // Outer frame (3D inset)
-    ctx.fillStyle = 'rgba(70,65,60,0.7)';
-    ctx.fillRect(cx - w / 2 - 3, y - 3, w + 6, h + 6);
-    // Dark recess
-    ctx.fillStyle = 'rgba(20,18,16,0.5)';
-    ctx.fillRect(cx - w / 2, y, w, h);
-    // Glass
-    var glassG = ctx.createLinearGradient(cx - w / 2, y, cx + w / 2, y + h);
-    glassG.addColorStop(0, 'rgba(100,150,200,0.18)');
-    glassG.addColorStop(0.4, 'rgba(80,130,180,0.10)');
-    glassG.addColorStop(1, 'rgba(120,170,220,0.15)');
-    ctx.fillStyle = glassG;
-    ctx.fillRect(cx - w / 2 + 2, y + 2, w - 4, h - 4);
-    // Reflection streak
-    ctx.fillStyle = 'rgba(200,220,240,0.08)';
-    ctx.beginPath();
-    ctx.moveTo(cx - w / 2 + 4, y + 3);
-    ctx.lineTo(cx - w / 2 + w * 0.3, y + 3);
-    ctx.lineTo(cx - w / 2 + 4, y + h * 0.5);
-    ctx.closePath();
-    ctx.fill();
-    // Mullions
-    ctx.strokeStyle = 'rgba(140,130,120,0.35)';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(cx, y + 2);
-    ctx.lineTo(cx, y + h - 2);
-    ctx.moveTo(cx - w / 2 + 2, y + h / 2);
-    ctx.lineTo(cx + w / 2 - 2, y + h / 2);
-    ctx.stroke();
-    // Frame bevels (light on top/left, dark on bottom/right)
-    ctx.strokeStyle = 'rgba(160,150,138,0.3)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(cx - w / 2 - 3, y - 3);
-    ctx.lineTo(cx + w / 2 + 3, y - 3);
-    ctx.moveTo(cx - w / 2 - 3, y - 3);
-    ctx.lineTo(cx - w / 2 - 3, y + h + 3);
-    ctx.stroke();
-    ctx.strokeStyle = 'rgba(40,35,30,0.3)';
-    ctx.beginPath();
-    ctx.moveTo(cx + w / 2 + 3, y - 3);
-    ctx.lineTo(cx + w / 2 + 3, y + h + 3);
-    ctx.lineTo(cx - w / 2 - 3, y + h + 3);
-    ctx.stroke();
-    // Sill
-    box3d(cx - w / 2 - 4, y + h + 3, w + 8, 4,
-      'rgba(130,120,108,0.6)',
-      'rgba(155,145,132,0.4)',
-      'rgba(100,90,78,0.6)');
-    // Light spill inside room
-    var spillG = ctx.createRadialGradient(cx, y + h * 0.4, 0, cx, y + h * 0.4, w * 0.8);
-    spillG.addColorStop(0, 'rgba(140,180,220,0.04)');
-    spillG.addColorStop(1, 'rgba(140,180,220,0)');
-    ctx.fillStyle = spillG;
-    ctx.fillRect(cx - w, y - 5, w * 2, h + 10);
-  }
-
-  /* ===================== KITCHEN 3D ===================== */
-  function drawKitchen3d(rx, ry, rw, rh) {
-    // Cabinets (back wall — upper)
-    var cabY = ry + rh * 0.12;
-    var cabH = rh * 0.20;
-    var cabW = rw * 0.55;
-    box3d(rx + 8, cabY, cabW, cabH,
-      'rgba(80,68,55,0.7)',
-      'rgba(100,88,72,0.4)',
-      'rgba(62,52,42,0.75)');
-    // Cabinet doors
-    var doorW = cabW / 3;
-    for (var cd = 0; cd < 3; cd++) {
-      ctx.strokeStyle = 'rgba(120,105,88,0.3)';
-      ctx.lineWidth = 0.7;
-      ctx.strokeRect(rx + 10 + cd * doorW, cabY + 2, doorW - 4, cabH - 4);
-      // knob
-      ctx.fillStyle = 'rgba(180,170,155,0.3)';
-      ctx.beginPath();
-      ctx.arc(rx + 10 + cd * doorW + doorW - 8, cabY + cabH / 2, 1.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Counter top
-    var ctrY = cabY + cabH + rh * 0.04;
-    box3d(rx + 6, ctrY, cabW + 4, 5,
-      'rgba(140,130,120,0.6)',
-      'rgba(170,160,148,0.35)',
-      'rgba(110,100,90,0.65)');
-
-    // Lower cabinets
-    box3d(rx + 8, ctrY + 5, cabW, rh * 0.30,
-      'rgba(72,62,50,0.7)',
-      'rgba(88,78,65,0.3)',
-      'rgba(55,46,38,0.75)');
-    for (var lc = 0; lc < 3; lc++) {
-      ctx.strokeStyle = 'rgba(100,88,72,0.25)';
-      ctx.lineWidth = 0.6;
-      ctx.strokeRect(rx + 10 + lc * doorW, ctrY + 7, doorW - 4, rh * 0.28 - 4);
-    }
-
-    // Sink (in counter)
-    var sinkX = rx + 8 + cabW * 0.35;
-    var sinkY = ctrY - 1;
-    ctx.fillStyle = 'rgba(160,170,180,0.25)';
-    ctx.beginPath();
-    ctx.ellipse(sinkX, sinkY, 12, 5, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(190,200,210,0.3)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    // Faucet
-    ctx.strokeStyle = 'rgba(190,200,210,0.35)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(sinkX + 3, sinkY);
-    ctx.quadraticCurveTo(sinkX + 10, sinkY - 16, sinkX + 6, sinkY - 4);
-    ctx.stroke();
-
-    // Drip
-    var dripPhase = (tick * 0.5) % 20;
-    var dripA = Math.max(0, 0.35 - dripPhase / 25);
-    ctx.fillStyle = 'rgba(100,180,220,' + dripA.toFixed(3) + ')';
-    ctx.beginPath();
-    ctx.arc(sinkX + 5, sinkY - 3 + dripPhase * 0.5, 1.5, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Under-sink leak glow (hidden problem indicator)
-    var leakA = 0.04 + Math.sin(tick * 0.02) * 0.03;
-    var leakG = ctx.createRadialGradient(sinkX, ctrY + 5 + rh * 0.18, 0, sinkX, ctrY + 5 + rh * 0.18, 25);
-    leakG.addColorStop(0, 'rgba(200,120,255,' + leakA.toFixed(3) + ')');
-    leakG.addColorStop(1, 'rgba(200,120,255,0)');
-    ctx.fillStyle = leakG;
-    ctx.fillRect(sinkX - 30, ctrY + 5, 60, rh * 0.30);
-
-    // Tile backsplash
-    drawTilePattern(rx + 8, cabY + cabH, cabW, rh * 0.04, 0.04);
-
-    // Floor tile
-    drawTilePattern(rx, ry + rh * 0.88, rw, rh * 0.12, 0.03);
-  }
-
-  /* ===================== HVAC 3D ===================== */
-  function drawHVAC3d(rx, ry, rw, rh) {
-    var unitW = Math.min(50, rw * 0.40);
-    var unitH = Math.min(70, rh * 0.65);
-    var cx = rx + rw * 0.5;
-    var cy = ry + rh * 0.5;
-    var ux = cx - unitW / 2;
-    var uy = cy - unitH / 2;
-
-    // HVAC unit body (3D box)
-    box3d(ux, uy, unitW, unitH,
-      'rgba(75,85,100,0.8)',
-      'rgba(95,105,120,0.5)',
-      'rgba(55,65,80,0.85)');
-    boxEdges(ux, uy, unitW, unitH, 'rgba(110,165,255,0.2)', 1);
-
-    // Panel lines
-    ctx.strokeStyle = 'rgba(100,160,255,0.15)';
-    ctx.lineWidth = 0.5;
-    ctx.beginPath();
-    ctx.moveTo(ux + 3, uy + unitH * 0.4);
-    ctx.lineTo(ux + unitW - 3, uy + unitH * 0.4);
-    ctx.stroke();
-
-    // Fan (upper section)
-    var fanCx = cx;
-    var fanCy = uy + unitH * 0.22;
-    var fanR = Math.min(14, unitW * 0.28);
-    // Fan housing circle
-    ctx.strokeStyle = 'rgba(100,160,255,0.22)';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.arc(fanCx, fanCy, fanR, 0, Math.PI * 2);
-    ctx.stroke();
-    // Spinning blades
-    for (var b = 0; b < 4; b++) {
-      var ba = tick * 0.04 + b * (Math.PI / 2);
-      var bx = Math.cos(ba) * (fanR - 2);
-      var by = Math.sin(ba) * (fanR - 2);
-      ctx.fillStyle = 'rgba(100,160,255,0.15)';
-      ctx.beginPath();
-      ctx.ellipse(fanCx + bx * 0.5, fanCy + by * 0.5, fanR * 0.6, 3, ba, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    // Center hub
-    ctx.fillStyle = 'rgba(100,160,255,0.25)';
-    ctx.beginPath();
-    ctx.arc(fanCx, fanCy, 3, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Control panel (lower section)
-    ctx.fillStyle = 'rgba(40,50,65,0.6)';
-    ctx.fillRect(ux + 5, uy + unitH * 0.55, unitW - 10, unitH * 0.12);
-    // LED indicator
-    var ledA = 0.4 + Math.sin(tick * 0.05) * 0.3;
-    ctx.fillStyle = 'rgba(0,230,120,' + ledA.toFixed(3) + ')';
-    ctx.beginPath();
-    ctx.arc(ux + 10, uy + unitH * 0.61, 2, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Label
-    ctx.save();
-    ctx.font = '600 ' + Math.max(8, Math.min(10, unitW * 0.18)) + 'px Inter, system-ui, sans-serif';
-    ctx.fillStyle = 'rgba(100,160,255,0.30)';
-    ctx.textAlign = 'center';
-    ctx.fillText('AIR HANDLER', cx, uy + unitH - 8);
-    ctx.restore();
-
-    // Air flow particles from unit
-    for (var af = 0; af < 6; af++) {
-      var afx = cx + (Math.random() - 0.5) * unitW * 0.6;
-      var afy = uy - 5 - ((tick * 0.5 + af * 12) % 30);
-      var afa = Math.max(0, 0.15 - ((tick * 0.5 + af * 12) % 30) / 50);
-      ctx.fillStyle = 'rgba(100,160,255,' + afa.toFixed(3) + ')';
-      ctx.beginPath();
-      ctx.arc(afx, afy, 1.2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  /* ===================== BATHROOM 3D ===================== */
-  function drawBathroom3d(rx, ry, rw, rh) {
-    // Shower/tub enclosure
-    var shX = rx + rw * 0.08;
-    var shY = ry + rh * 0.22;
-    var shW = rw * 0.38;
-    var shH = rh * 0.62;
-
-    // Tub base
-    box3d(shX, shY + shH - 8, shW, 8,
-      'rgba(200,210,220,0.25)',
-      'rgba(220,230,240,0.15)',
-      'rgba(170,180,190,0.28)');
-
-    // Glass enclosure walls
-    ctx.save();
-    ctx.strokeStyle = 'rgba(160,210,230,0.25)';
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(shX, shY, shW, shH);
-    // Glass fill
-    ctx.fillStyle = 'rgba(140,200,220,0.04)';
-    ctx.fillRect(shX, shY, shW, shH);
-    ctx.restore();
-
-    // Shower head (3D nub)
-    ctx.fillStyle = 'rgba(190,200,210,0.5)';
-    ctx.beginPath();
-    ctx.arc(shX + shW * 0.75, shY + 10, 5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(210,220,230,0.3)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(shX + shW * 0.75, shY + 15);
-    ctx.lineTo(shX + shW * 0.75, shY + 3);
-    ctx.lineTo(shX + shW - 3, shY + 3);
-    ctx.stroke();
-
-    // Water drops (animated)
-    for (var wd = 0; wd < 8; wd++) {
-      var wdx = shX + shW * 0.35 + wd * (shW * 0.07);
-      var wdy = shY + 18 + ((tick * 0.6 + wd * 10) % (shH - 30));
-      var wda = 0.10 + Math.sin(tick * 0.03 + wd * 0.7) * 0.06;
-      ctx.fillStyle = 'rgba(100,180,230,' + wda.toFixed(3) + ')';
-      ctx.beginPath();
-      // Teardrop shape
-      ctx.arc(wdx, wdy, 1.8, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Steam rising (volumetric wisps)
-    for (var st = 0; st < 5; st++) {
-      var stx = shX + shW * 0.15 + st * (shW * 0.17);
-      var sty = shY - 8 - Math.sin(tick * 0.012 + st * 1.5) * 12;
-      var sta = 0.03 + Math.sin(tick * 0.015 + st * 1.1) * 0.02;
-      var stR = 6 + Math.sin(tick * 0.008 + st) * 3;
-      var steamG = ctx.createRadialGradient(stx, sty, 0, stx, sty, stR);
-      steamG.addColorStop(0, 'rgba(200,220,240,' + (sta * 1.5).toFixed(3) + ')');
-      steamG.addColorStop(1, 'rgba(200,220,240,0)');
-      ctx.fillStyle = steamG;
-      ctx.beginPath();
-      ctx.arc(stx, sty, stR, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Toilet (simple 3D)
-    var tlX = rx + rw * 0.62;
-    var tlY = ry + rh * 0.55;
-    // Bowl
-    ctx.fillStyle = 'rgba(210,215,220,0.20)';
-    ctx.beginPath();
-    ctx.ellipse(tlX, tlY + 8, 8, 10, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(200,205,210,0.25)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    // Tank
-    box3d(tlX - 7, tlY - 8, 14, 12,
-      'rgba(210,215,220,0.22)',
-      'rgba(230,235,240,0.12)',
-      'rgba(190,195,200,0.25)');
-
-    // Vanity sink
-    var vanX = rx + rw * 0.60;
-    var vanY = ry + rh * 0.20;
-    ctx.fillStyle = 'rgba(210,215,220,0.18)';
-    ctx.beginPath();
-    ctx.ellipse(vanX, vanY + 5, 10, 4, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(200,205,210,0.20)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    // Mirror
-    ctx.fillStyle = 'rgba(120,160,200,0.06)';
-    ctx.fillRect(vanX - 10, vanY - 20, 20, 18);
-    ctx.strokeStyle = 'rgba(180,190,200,0.15)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(vanX - 10, vanY - 20, 20, 18);
-
-    // Mold spots on grout (subtle)
-    for (var ms = 0; ms < 4; ms++) {
-      var msx = shX + 5 + ms * (shW * 0.22);
-      var msy = shY + shH - 20 + Math.sin(ms * 2.1) * 8;
-      var msa = 0.05 + Math.sin(tick * 0.01 + ms) * 0.03;
-      ctx.fillStyle = 'rgba(60,200,180,' + msa.toFixed(3) + ')';
-      ctx.beginPath();
-      ctx.arc(msx, msy, 2.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  /* ===================== BEDROOM 3D ===================== */
-  function drawBedroom3d(rx, ry, rw, rh) {
-    // Bed (3D box)
-    var bedX = rx + rw * 0.15;
-    var bedY = ry + rh * 0.52;
-    var bedW = Math.min(70, rw * 0.55);
-    var bedH = 18;
-    var bedDepth = 6;
-
-    // Mattress
-    box3d(bedX, bedY, bedW, bedH,
-      'rgba(85,80,110,0.5)',
-      'rgba(105,100,130,0.3)',
-      'rgba(65,60,88,0.55)');
-
-    // Bedding/comforter
-    ctx.fillStyle = 'rgba(75,72,100,0.4)';
-    ctx.beginPath();
-    ctx.roundRect(bedX + 2, bedY + 2, bedW - 4, bedH - 4, 2);
-    ctx.fill();
-
-    // Pillow
-    box3d(bedX + 3, bedY + 3, 18, bedH - 6,
-      'rgba(180,175,200,0.30)',
-      'rgba(200,195,220,0.15)',
-      'rgba(150,145,170,0.32)');
-
-    // Headboard
-    box3d(bedX - 3, bedY - 14, 4, 14 + bedH,
-      'rgba(95,78,60,0.5)',
-      'rgba(120,100,78,0.3)',
-      'rgba(72,58,44,0.55)');
-
-    // Nightstand
-    var nsX = bedX + bedW + 6;
-    var nsY = bedY + 4;
-    box3d(nsX, nsY, 16, 14,
-      'rgba(85,72,58,0.45)',
-      'rgba(108,92,75,0.25)',
-      'rgba(65,52,40,0.50)');
-    // Lamp on nightstand
-    ctx.fillStyle = 'rgba(200,185,120,0.20)';
-    ctx.beginPath();
-    ctx.arc(nsX + 8, nsY - 4, 5, 0, Math.PI * 2);
-    ctx.fill();
-    // Lamp glow
-    var lampG = ctx.createRadialGradient(nsX + 8, nsY - 4, 0, nsX + 8, nsY - 4, 20);
-    lampG.addColorStop(0, 'rgba(255,230,160,0.04)');
-    lampG.addColorStop(1, 'rgba(255,230,160,0)');
-    ctx.fillStyle = lampG;
-    ctx.fillRect(nsX - 15, nsY - 25, 50, 50);
-
-    // Baseboard
-    ctx.fillStyle = 'rgba(110,100,88,0.15)';
-    ctx.fillRect(rx, ry + rh - 5, rw, 5);
-  }
-
-  /* ===================== WALL MOISTURE ===================== */
-  function drawWallMoisture(x, y, w, h) {
-    // Inside-the-wall cavity visualization
-    for (var wm = 0; wm < 6; wm++) {
-      var wmy = y + 15 + wm * ((h - 30) / 5);
-      var wmx = x + w / 2;
-      var pAlpha = 0.06 + Math.sin(tick * 0.015 + wm * 1.2) * 0.05;
-      // Water stain spreading
-      var stainG = ctx.createRadialGradient(wmx, wmy, 0, wmx, wmy, 8 + Math.sin(tick * 0.01 + wm) * 2);
-      stainG.addColorStop(0, 'rgba(255,100,100,' + pAlpha.toFixed(3) + ')');
-      stainG.addColorStop(1, 'rgba(255,100,100,0)');
-      ctx.fillStyle = stainG;
-      ctx.beginPath();
-      ctx.arc(wmx, wmy, 10, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  /* ===================== DUCTWORK ===================== */
-  function drawDucts(g) {
-    var hvacCx = g.lowerDivX + (g.wallR - g.lowerDivX) * 0.5;
-    var hvacTop = g.lowerTop + g.lowerH * 0.18;
-    var ductW = 6;
-
-    ctx.save();
-    // Main trunk (vertical)
-    ctx.fillStyle = 'rgba(80,90,110,0.3)';
-    ctx.fillRect(hvacCx - ductW / 2, g.upperTop + 5, ductW, hvacTop - g.upperTop - 5);
-    // Metallic shine
-    var shineG = ctx.createLinearGradient(hvacCx - ductW / 2, 0, hvacCx + ductW / 2, 0);
-    shineG.addColorStop(0, 'rgba(140,160,190,0.08)');
-    shineG.addColorStop(0.5, 'rgba(180,200,230,0.12)');
-    shineG.addColorStop(1, 'rgba(140,160,190,0.08)');
-    ctx.fillStyle = shineG;
-    ctx.fillRect(hvacCx - ductW / 2, g.upperTop + 5, ductW, hvacTop - g.upperTop - 5);
-
-    // Branches (horizontal) — draw with rounded joints
-    var branchY = g.upperTop + g.upperH * 0.35;
-    // Left branch
-    ctx.fillStyle = 'rgba(80,90,110,0.25)';
-    ctx.fillRect(g.wallL + 10, branchY - ductW / 2, hvacCx - g.wallL - 10, ductW);
-    // Right branch
-    ctx.fillRect(hvacCx, branchY - ductW / 2, g.wallR - hvacCx - 10, ductW);
-
-    // Joint circles
-    ctx.fillStyle = 'rgba(100,120,150,0.2)';
-    ctx.beginPath();
-    ctx.arc(hvacCx, branchY, ductW / 2 + 1, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Duct seam lines
-    ctx.strokeStyle = 'rgba(120,140,170,0.10)';
-    ctx.lineWidth = 0.5;
-    for (var ds = 0; ds < 6; ds++) {
-      var dsy = g.upperTop + 10 + ds * ((hvacTop - g.upperTop - 15) / 5);
-      ctx.beginPath();
-      ctx.moveTo(hvacCx - ductW / 2, dsy);
-      ctx.lineTo(hvacCx + ductW / 2, dsy);
-      ctx.stroke();
-    }
-
-    // Air flow particles in ducts
-    for (var dp = 0; dp < 4; dp++) {
-      var dpx = g.wallL + 15 + ((tick * 0.8 + dp * 40) % (hvacCx - g.wallL - 25));
-      var dpa = 0.08 + Math.sin(tick * 0.03 + dp) * 0.04;
-      ctx.fillStyle = 'rgba(100,160,255,' + dpa.toFixed(3) + ')';
-      ctx.beginPath();
-      ctx.arc(dpx, branchY, 1.2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    ctx.restore();
-  }
-
-  /* ===================== ZONE HIGHLIGHTS ===================== */
-  function drawZoneHighlights() {
-    for (var z = 0; z < zones.length; z++) {
-      var zone = zones[z];
-      var data = ZONE_DATA[zone.id];
-      var isActive = activeZone === zone.id;
-      var isHover = hoverZone === zone.id;
-      var c = data.color;
-      var rgb = c[0] + ',' + c[1] + ',' + c[2];
-
-      if (isActive || isHover) {
-        var pulseA = isActive ? 0.10 + Math.sin(tick * 0.04) * 0.04 : 0.05;
-
-        // Front face highlight
-        ctx.fillStyle = 'rgba(' + rgb + ',' + pulseA.toFixed(3) + ')';
-        ctx.fillRect(zone.x, zone.y, zone.w, zone.h);
-
-        // Glowing border
-        ctx.save();
-        ctx.shadowColor = 'rgba(' + rgb + ',' + (isActive ? 0.5 : 0.25) + ')';
-        ctx.shadowBlur = isActive ? 12 : 6;
-        ctx.strokeStyle = 'rgba(' + rgb + ',' + (isActive ? 0.5 : 0.25) + ')';
-        ctx.lineWidth = isActive ? 2 : 1.5;
-        ctx.strokeRect(zone.x + 0.5, zone.y + 0.5, zone.w - 1, zone.h - 1);
-        ctx.restore();
-
-        // Depth face highlight (right side)
-        var dAlpha = pulseA * 0.6;
-        var btr = bk(zone.x + zone.w, zone.y);
-        var brb = bk(zone.x + zone.w, zone.y + zone.h);
-        ctx.fillStyle = 'rgba(' + rgb + ',' + dAlpha.toFixed(3) + ')';
-        ctx.beginPath();
-        ctx.moveTo(zone.x + zone.w, zone.y);
-        ctx.lineTo(btr[0], btr[1]);
-        ctx.lineTo(brb[0], brb[1]);
-        ctx.lineTo(zone.x + zone.w, zone.y + zone.h);
-        ctx.closePath();
-        ctx.fill();
-
-        // Top face highlight
-        var btl = bk(zone.x, zone.y);
-        ctx.fillStyle = 'rgba(' + rgb + ',' + (dAlpha * 0.8).toFixed(3) + ')';
-        ctx.beginPath();
-        ctx.moveTo(zone.x, zone.y);
-        ctx.lineTo(btl[0], btl[1]);
-        ctx.lineTo(btr[0], btr[1]);
-        ctx.lineTo(zone.x + zone.w, zone.y);
-        ctx.closePath();
-        ctx.fill();
-      }
-
-      // Zone label
-      var labelX = zone.x + zone.w / 2;
-      var labelY = zone.y + zone.h / 2;
-      var fontSize = Math.max(9, Math.min(13, W * 0.016));
-      ctx.save();
-      ctx.font = (isActive ? '700 ' : '500 ') + fontSize + 'px Inter, system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-
-      if (isActive) {
-        ctx.shadowColor = 'rgba(' + rgb + ',0.6)';
-        ctx.shadowBlur = 10;
-        ctx.fillStyle = 'rgba(' + rgb + ',0.95)';
-      } else if (isHover) {
-        ctx.fillStyle = 'rgba(255,255,255,0.55)';
-      } else {
-        ctx.fillStyle = 'rgba(255,255,255,0.22)';
-      }
-
-      // Text outline for readability
-      ctx.strokeStyle = 'rgba(0,0,0,0.4)';
-      ctx.lineWidth = 2.5;
-      ctx.lineJoin = 'round';
-      ctx.strokeText(data.title, labelX, labelY);
-      ctx.fillText(data.title, labelX, labelY);
-      ctx.restore();
-    }
-  }
-
-  /* ===================== MAIN LOOP ===================== */
-  function loop() {
-    tick++;
-    ctx.clearRect(0, 0, W, H);
-    updateParticles();
-    drawParticles();
-    drawHouse();
-    requestAnimationFrame(loop);
-  }
-
-  /* ===================== HIT TESTING ===================== */
-  function getZoneAt(px, py) {
-    for (var i = zones.length - 1; i >= 0; i--) {
-      var z = zones[i];
-      if (px >= z.x && px <= z.x + z.w && py >= z.y && py <= z.y + z.h) {
-        return z.id;
-      }
-    }
-    return null;
-  }
-
-  function canvasCoords(e) {
-    var rect = canvas.getBoundingClientRect();
-    var cx, cy;
-    if (e.touches && e.touches.length) {
-      cx = e.touches[0].clientX;
-      cy = e.touches[0].clientY;
-    } else {
-      cx = e.clientX;
-      cy = e.clientY;
-    }
-    return { x: cx - rect.left, y: cy - rect.top };
-  }
-
-  function showZoneInfo(zoneId) {
-    if (!infoEl) return;
-    if (!zoneId) {
-      infoEl.innerHTML = '<div class="house-vis__info-default"><p>Tap any highlighted zone to learn what hides there.</p></div>';
-      return;
-    }
-    var d = ZONE_DATA[zoneId];
-    infoEl.innerHTML =
-      '<div class="house-vis__info-detail">' +
-        '<h3>' + d.title + '</h3>' +
-        '<p>' + d.desc + '</p>' +
-        '<a href="' + d.link + '">' + d.linkText + '</a>' +
-      '</div>';
-  }
-
-  canvas.addEventListener('click', function (e) {
-    var pos = canvasCoords(e);
-    var hit = getZoneAt(pos.x, pos.y);
-    if (hit === activeZone) { activeZone = null; showZoneInfo(null); }
-    else { activeZone = hit; showZoneInfo(hit); }
+/* ================================================================
+   3D Interactive House Explorer — Three.js WebGL
+   Floating 3D home with orbit controls, per-room air-flow
+   particle systems, detailed room interiors, and smooth
+   camera focus transitions.
+   ================================================================ */
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ── Palette ────────────────────────────────────────────
+const P = {
+  wall:       0xf0e8dc, wallInner: 0xe8ddd0,
+  floor:      0xc49a6c, floorDark: 0xa87d52,
+  ceiling:    0xf5f0e8,
+  roof:       0x8b5e3c, roofDark: 0x6b4423,
+  foundation: 0x9a9a9a, ground: 0x6b6b5a,
+  trim:       0xffffff,
+  glass:      0x88ccee,
+  sofa:       0x6b8e7b, bed: 0x4a7ab5,
+  pillow:     0xf0f0f0, wood: 0xb07840,
+  cabinet:    0xe0d0b8, counter: 0xddd5c8,
+  appliance:  0xd0d0d0, tile: 0xd4e5f0,
+  porcelain:  0xf5f5f5, rug: 0x8b4e6a,
+  supply:     0x00ddff, ret: 0xffaa44,
+  exhaust:    0xff6644, moisture: 0xccddff,
+  contam:     0xff4488, fresh: 0x44ff88,
+  radon:      0xaa66ff, dust: 0xddcc99,
+  cyan:       0x00e5ff,
+};
+
+// ── Room definitions ───────────────────────────────────
+const ROOMS = {
+  living: {
+    name: 'Living Room',
+    desc: 'Supply vents push conditioned air in while return ducts pull it back. Without proper filtration, allergens, pet dander, and VOCs circulate continuously.',
+    link: 'pages/indoor-air-quality-101.html',
+    color: 0x4488ff,
+    camOffset: new THREE.Vector3(6, 3, 12),
+    lookAt: new THREE.Vector3(-4, 2, 0),
+    flows: [
+      { label: 'Supply Air',    hex: '#00ddff' },
+      { label: 'Return Flow',   hex: '#ffaa44' },
+      { label: 'Dust Particles',hex: '#ddcc99' },
+    ],
+  },
+  kitchen: {
+    name: 'Kitchen',
+    desc: 'Cooking generates VOCs, CO, and particulate matter. Gas stoves produce NO\u2082. Range hoods exhaust some pollutants, but much recirculates.',
+    link: 'pages/indoor-air-quality-101.html',
+    color: 0xff8844,
+    camOffset: new THREE.Vector3(-4, 3, 14),
+    lookAt: new THREE.Vector3(4, 2, 0),
+    flows: [
+      { label: 'Cooking Fumes', hex: '#ff6644' },
+      { label: 'Range Hood Draw',hex:'#ffaa44' },
+      { label: 'Supply Air',    hex: '#00ddff' },
+    ],
+  },
+  bedroom: {
+    name: 'Bedroom',
+    desc: 'You spend 8 hrs breathing here. Poor filtration means allergens, dust mites, and VOCs from furniture off-gassing circulate all night.',
+    link: 'pages/indoor-air-quality-101.html',
+    color: 0x5588ff,
+    camOffset: new THREE.Vector3(6, 7, 12),
+    lookAt: new THREE.Vector3(-4, 6, 0),
+    flows: [
+      { label: 'Supply Air',   hex: '#00ddff' },
+      { label: 'Circulation',  hex: '#aaddff' },
+      { label: 'Dust / VOCs',  hex: '#ddcc99' },
+    ],
+  },
+  bathroom: {
+    name: 'Bathroom',
+    desc: 'Daily showers create ideal mold conditions behind walls, on grout, and in exhaust ducts. A weak exhaust fan allows moisture to spread.',
+    link: 'pages/indoor-air-quality-101.html',
+    color: 0x44ddaa,
+    camOffset: new THREE.Vector3(-4, 7, 14),
+    lookAt: new THREE.Vector3(4, 6, 0),
+    flows: [
+      { label: 'Steam / Moisture', hex: '#ccddff' },
+      { label: 'Exhaust Fan Draw', hex: '#ffaa44' },
+      { label: 'Air Under Door',   hex: '#00ddff' },
+    ],
+  },
+  attic: {
+    name: 'Attic / HVAC',
+    desc: 'Ducts in unconditioned attic space lose energy and can pull contaminated air through leaks at joints and connections.',
+    link: 'pages/indoor-air-quality-101.html',
+    color: 0xffcc44,
+    camOffset: new THREE.Vector3(0, 14, 16),
+    lookAt: new THREE.Vector3(0, 9.5, 0),
+    flows: [
+      { label: 'Duct Air Flow', hex: '#00ddff' },
+      { label: 'Duct Leaks',    hex: '#ff4488' },
+      { label: 'Hot Attic Air',  hex: '#ff6644' },
+    ],
+  },
+  crawlspace: {
+    name: 'Crawlspace',
+    desc: 'Ground moisture, radon gas, and mold spores rise through the floor. Without a sealed vapor barrier, your home breathes contaminated air.',
+    link: 'pages/indoor-air-quality-101.html',
+    color: 0xaa88ff,
+    camOffset: new THREE.Vector3(0, 0, 18),
+    lookAt: new THREE.Vector3(0, -1, 0),
+    flows: [
+      { label: 'Ground Moisture', hex: '#ccddff' },
+      { label: 'Radon Gas',       hex: '#aa66ff' },
+      { label: 'Stack Effect',    hex: '#ffaa44' },
+    ],
+  },
+};
+
+// ── Helpers ────────────────────────────────────────────
+function mat(color, opts = {}) {
+  return new THREE.MeshStandardMaterial({
+    color, roughness: opts.r ?? 0.75, metalness: opts.m ?? 0.0,
+    transparent: opts.t ?? false, opacity: opts.o ?? 1,
+    side: opts.side ?? THREE.FrontSide, ...opts.extra,
   });
+}
 
-  canvas.addEventListener('mousemove', function (e) {
-    var pos = canvasCoords(e);
-    hoverZone = getZoneAt(pos.x, pos.y);
-    canvas.style.cursor = hoverZone ? 'pointer' : 'default';
-  });
+function box(w, h, d, material) {
+  const g = new THREE.BoxGeometry(w, h, d);
+  const m = new THREE.Mesh(g, material);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  return m;
+}
 
-  canvas.addEventListener('mouseleave', function () { hoverZone = null; });
+function cyl(rT, rB, h, seg, material) {
+  const g = new THREE.CylinderGeometry(rT, rB, h, seg);
+  const m = new THREE.Mesh(g, material);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  return m;
+}
 
-  /* ===================== INIT ===================== */
-  function init() {
-    resize();
-    loop();
-    var rt;
-    window.addEventListener('resize', function () {
-      clearTimeout(rt);
-      rt = setTimeout(resize, 200);
+// ── Edge glow helper ───────────────────────────────────
+function addEdges(mesh, color = P.cyan, opacity = 0.18) {
+  const edges = new THREE.EdgesGeometry(mesh.geometry, 20);
+  const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({
+    color, transparent: true, opacity,
+  }));
+  mesh.add(line);
+}
+
+// ════════════════════════════════════════════════════════
+//  HouseExplorer
+// ════════════════════════════════════════════════════════
+class HouseExplorer {
+  constructor() {
+    this.canvas = document.getElementById('houseCutCanvas');
+    this.infoPanel = document.getElementById('houseInfo');
+    this.overlay = document.getElementById('houseOverlay');
+    this.hintEl = document.getElementById('houseHint');
+    if (!this.canvas) return;
+
+    this.scene = new THREE.Scene();
+    this.roomHitBoxes = [];
+    this.activeRoom = null;
+    this.roofVisible = true;
+    this.roofGroup = null;
+    this.clock = new THREE.Clock();
+    this.particleSystems = [];
+
+    // Camera targets for smooth transitions
+    this.camTarget = null;
+    this.lookTarget = null;
+    this.defaultCam = new THREE.Vector3(16, 13, 22);
+    this.defaultLook = new THREE.Vector3(0, 3.5, 0);
+
+    this._pointerDown = new THREE.Vector2();
+    this._didDrag = false;
+
+    this.init();
+  }
+
+  // ── Initialisation ─────────────────────────────────
+  init() {
+    // Renderer
+    this.renderer = new THREE.WebGLRenderer({
+      canvas: this.canvas, antialias: true, alpha: false,
+    });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.4;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+    // Camera
+    const ar = (this.canvas.clientWidth || 1) / (this.canvas.clientHeight || 1);
+    this.camera = new THREE.PerspectiveCamera(40, ar, 0.1, 500);
+    this.camera.position.copy(this.defaultCam);
+    this.camera.lookAt(this.defaultLook);
+
+    // Controls
+    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+    this.controls.enableDamping = true;
+    this.controls.dampingFactor = 0.07;
+    this.controls.target.copy(this.defaultLook);
+    this.controls.minDistance = 6;
+    this.controls.maxDistance = 55;
+    this.controls.maxPolarAngle = Math.PI * 0.88;
+    this.controls.update();
+
+    // Background
+    this.scene.background = new THREE.Color(0x040810);
+
+    this.setupLighting();
+    this.addStarfield();
+    this.addGridPlane();
+    this.buildHouse();
+    this.buildRoomHitBoxes();
+    this.initAirParticles();
+
+    // Events
+    this.raycaster = new THREE.Raycaster();
+    this.pointer = new THREE.Vector2();
+    this.canvas.addEventListener('pointerdown', (e) => this.onDown(e));
+    this.canvas.addEventListener('pointerup', (e) => this.onUp(e));
+    window.addEventListener('resize', () => this.resize());
+
+    const resetBtn = document.getElementById('houseResetBtn');
+    const roofBtn = document.getElementById('houseRoofBtn');
+    if (resetBtn) resetBtn.addEventListener('click', () => this.resetView());
+    if (roofBtn) roofBtn.addEventListener('click', () => this.toggleRoof());
+
+    this.resize();
+    this.animate();
+  }
+
+  // ── Lighting ───────────────────────────────────────
+  setupLighting() {
+    this.scene.add(new THREE.AmbientLight(0xffeedd, 0.65));
+    this.scene.add(new THREE.HemisphereLight(0x99bbdd, 0x886644, 0.35));
+
+    const sun = new THREE.DirectionalLight(0xfff5e0, 1.3);
+    sun.position.set(14, 22, 12);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    const sc = sun.shadow.camera;
+    sc.left = -18; sc.right = 18; sc.top = 18; sc.bottom = -6;
+    sc.near = 1; sc.far = 60;
+    sun.shadow.bias = -0.0008;
+    this.scene.add(sun);
+
+    const fill = new THREE.DirectionalLight(0xaabbee, 0.35);
+    fill.position.set(-12, 10, -8);
+    this.scene.add(fill);
+
+    // Interior warm glow per room
+    [[-4,2.8,1],[4,2.8,1],[-4,6.8,1],[4,6.8,1]].forEach(([x,y,z]) => {
+      const p = new THREE.PointLight(0xfff4e0, 0.45, 10);
+      p.position.set(x, y, z);
+      this.scene.add(p);
     });
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
+  // ── Starfield ──────────────────────────────────────
+  addStarfield() {
+    const n = 600, pos = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      pos[i*3]   = (Math.random() - 0.5) * 250;
+      pos[i*3+1] = (Math.random() - 0.5) * 250;
+      pos[i*3+2] = (Math.random() - 0.5) * 250;
+    }
+    const bg = new THREE.BufferGeometry();
+    bg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    this.scene.add(new THREE.Points(bg, new THREE.PointsMaterial({
+      color: 0xffffff, size: 0.18, transparent: true, opacity: 0.55,
+      sizeAttenuation: true,
+    })));
   }
-})();
+
+  // ── Ground grid ────────────────────────────────────
+  addGridPlane() {
+    const grid = new THREE.GridHelper(60, 60, 0x112233, 0x0a1525);
+    grid.position.y = -2.01;
+    grid.material.transparent = true;
+    grid.material.opacity = 0.25;
+    this.scene.add(grid);
+  }
+
+  // ════════════════════════════════════════════════════
+  //  BUILD HOUSE
+  // ════════════════════════════════════════════════════
+  buildHouse() {
+    const house = new THREE.Group();
+    this.houseGroup = house;
+
+    const wM = mat(P.wall);
+    const wI = mat(P.wallInner);
+    const flM = mat(P.floor, { r: 0.65 });
+    const cM = mat(P.ceiling, { r: 0.85 });
+    const fndM = mat(P.foundation, { r: 0.95 });
+    const T = 0.25; // wall thickness
+
+    // ── Exterior walls ──
+    // Back wall
+    const back = box(16 + T, 8, T, wM);
+    back.position.set(0, 4, -5);
+    house.add(back);
+    addEdges(back);
+
+    // Left wall
+    const left = box(T, 8, 10, wM);
+    left.position.set(-8, 4, 0);
+    house.add(left);
+    addEdges(left);
+
+    // Right wall
+    const right = box(T, 8, 10, wM);
+    right.position.set(8, 4, 0);
+    house.add(right);
+    addEdges(right);
+
+    // Centre dividing wall (vertical)
+    const divV = box(T, 8, 10, wI);
+    divV.position.set(0, 4, 0);
+    house.add(divV);
+
+    // ── Floors ──
+    // Ground slab
+    const slab = box(16, T, 10, flM);
+    slab.position.set(0, 0, 0);
+    slab.receiveShadow = true;
+    house.add(slab);
+
+    // Second floor / ceiling of ground floor
+    const floor2 = box(16, T, 10, flM);
+    floor2.position.set(0, 4, 0);
+    floor2.receiveShadow = true;
+    house.add(floor2);
+
+    // Attic floor
+    const atticFloor = box(16, T, 10, cM);
+    atticFloor.position.set(0, 8, 0);
+    house.add(atticFloor);
+
+    // ── Foundation / Crawlspace ──
+    const fndL = box(T, 2, 10, fndM);
+    fndL.position.set(-8, -1, 0);
+    house.add(fndL);
+    const fndR = box(T, 2, 10, fndM);
+    fndR.position.set(8, -1, 0);
+    house.add(fndR);
+    const fndB = box(16, 2, T, fndM);
+    fndB.position.set(0, -1, -5);
+    house.add(fndB);
+
+    // Ground plane (crawl)
+    const crawlGnd = box(16, 0.1, 10, mat(P.ground, { r: 1 }));
+    crawlGnd.position.set(0, -2, 0);
+    crawlGnd.receiveShadow = true;
+    house.add(crawlGnd);
+
+    // Foundation piers
+    const pierM = mat(P.foundation, { r: 0.9 });
+    [[-4,-1,0],[0,-1,0],[4,-1,0],[-4,-1,-3],[4,-1,-3],[0,-1,3]].forEach(([x,y,z]) => {
+      const p = cyl(0.3, 0.35, 2, 8, pierM);
+      p.position.set(x, y, z);
+      house.add(p);
+    });
+
+    // Vapor barrier
+    const vapor = box(14, 0.02, 8, mat(0x556677, { t: true, o: 0.3, r: 0.4 }));
+    vapor.position.set(0, -1.9, 0);
+    house.add(vapor);
+
+    // ── Roof ──
+    this.roofGroup = new THREE.Group();
+    const roofM = mat(P.roof, { r: 0.85 });
+    const roofDM = mat(P.roofDark, { r: 0.85 });
+
+    // Left slope
+    const slopeL = box(8.5, 0.2, 10.6, roofM);
+    slopeL.position.set(-4, 9.5, 0);
+    slopeL.rotation.z = Math.PI * 0.17;
+    this.roofGroup.add(slopeL);
+    addEdges(slopeL, P.cyan, 0.12);
+
+    // Right slope
+    const slopeR = box(8.5, 0.2, 10.6, roofDM);
+    slopeR.position.set(4, 9.5, 0);
+    slopeR.rotation.z = -Math.PI * 0.17;
+    this.roofGroup.add(slopeR);
+    addEdges(slopeR, P.cyan, 0.12);
+
+    // Ridge cap
+    const ridge = box(0.4, 0.15, 10.8, mat(P.roofDark, { r: 0.7 }));
+    ridge.position.set(0, 10.8, 0);
+    this.roofGroup.add(ridge);
+
+    // Gable walls (triangular — approximated with box)
+    const gableM = mat(P.wall);
+    const gF = box(16, 3, 0.15, gableM);
+    gF.position.set(0, 9.5, 5);
+    // Clip with a more interesting look — leave as box for simplicity
+    this.roofGroup.add(gF);
+    const gB = box(16, 3, 0.15, gableM);
+    gB.position.set(0, 9.5, -5);
+    this.roofGroup.add(gB);
+
+    house.add(this.roofGroup);
+
+    // ── Windows in back wall ──
+    this.addWindow(house, -5, 2, -4.8, 1.6, 1.6);
+    this.addWindow(house, -3, 2, -4.8, 1.6, 1.6);
+    this.addWindow(house, 3, 2, -4.8, 1.6, 1.6);
+    this.addWindow(house, 5, 2, -4.8, 1.6, 1.6);
+    this.addWindow(house, -5, 6, -4.8, 1.6, 1.6);
+    this.addWindow(house, -3, 6, -4.8, 1.6, 1.6);
+    this.addWindow(house, 3, 6.3, -4.8, 1.0, 1.0);
+    this.addWindow(house, 5, 6, -4.8, 1.6, 1.6);
+
+    // ── Room interiors ──
+    this.buildLivingRoom(house);
+    this.buildKitchen(house);
+    this.buildBedroom(house);
+    this.buildBathroom(house);
+    this.buildAttic(house);
+    this.buildCrawlspaceDetails(house);
+
+    this.scene.add(house);
+  }
+
+  // ── Window ─────────────────────────────────────────
+  addWindow(parent, x, y, z, w, h) {
+    const frameM = mat(P.trim, { r: 0.4 });
+    const glassM = mat(P.glass, { t: true, o: 0.25, r: 0.1, m: 0.1 });
+
+    // Frame
+    const fT = 0.08;
+    const top = box(w + 0.16, fT, 0.12, frameM);
+    top.position.set(x, y + h / 2, z + 0.1);
+    parent.add(top);
+    const bot = box(w + 0.16, fT, 0.12, frameM);
+    bot.position.set(x, y - h / 2, z + 0.1);
+    parent.add(bot);
+    const lf = box(fT, h, 0.12, frameM);
+    lf.position.set(x - w / 2, y, z + 0.1);
+    parent.add(lf);
+    const rf = box(fT, h, 0.12, frameM);
+    rf.position.set(x + w / 2, y, z + 0.1);
+    parent.add(rf);
+
+    // Mullion (cross)
+    const mH = box(w, 0.04, 0.06, frameM);
+    mH.position.set(x, y, z + 0.12);
+    parent.add(mH);
+    const mV = box(0.04, h, 0.06, frameM);
+    mV.position.set(x, y, z + 0.12);
+    parent.add(mV);
+
+    // Glass pane
+    const pane = box(w, h, 0.03, glassM);
+    pane.position.set(x, y, z + 0.06);
+    parent.add(pane);
+
+    // Sill
+    const sill = box(w + 0.3, 0.06, 0.25, frameM);
+    sill.position.set(x, y - h / 2 - 0.03, z + 0.15);
+    parent.add(sill);
+  }
+
+  // ═══════════════════════════════════════════════════
+  //  ROOM INTERIORS
+  // ═══════════════════════════════════════════════════
+
+  // ── Living Room (left, ground) ─────────────────────
+  buildLivingRoom(parent) {
+    const g = new THREE.Group();
+    const wdM = mat(P.wood, { r: 0.6 });
+    const sofaM = mat(P.sofa);
+    const rugM = mat(P.rug, { r: 0.9 });
+    const applM = mat(P.appliance, { r: 0.3, m: 0.4 });
+
+    // Rug
+    const rug = box(4, 0.04, 3, rugM);
+    rug.position.set(-4, 0.15, 1);
+    g.add(rug);
+
+    // Sofa (against back wall)
+    const sofaBase = box(3, 0.55, 1, sofaM);
+    sofaBase.position.set(-4.5, 0.4, -3.5);
+    g.add(sofaBase);
+    const sofaBack = box(3, 0.6, 0.25, sofaM);
+    sofaBack.position.set(-4.5, 0.9, -4.1);
+    g.add(sofaBack);
+    const armL = box(0.25, 0.4, 1, sofaM);
+    armL.position.set(-5.9, 0.55, -3.5);
+    g.add(armL);
+    const armR = box(0.25, 0.4, 1, sofaM);
+    armR.position.set(-3.1, 0.55, -3.5);
+    g.add(armR);
+    // Cushions
+    [[-5,-4,-3.5],[-4,-4,-3.5]].forEach(([x,y,z]) => {
+      const c = box(0.85, 0.12, 0.85, mat(0x5a7e6b));
+      c.position.set(x, 0.73, z);
+      g.add(c);
+    });
+
+    // Coffee table
+    const ctTop = box(1.4, 0.08, 0.7, wdM);
+    ctTop.position.set(-4.5, 0.5, -1.8);
+    g.add(ctTop);
+    [[-5.1,0.24,-2.05],[-3.9,0.24,-2.05],[-5.1,0.24,-1.55],[-3.9,0.24,-1.55]].forEach(([x,y,z]) => {
+      const leg = box(0.06, 0.48, 0.06, wdM);
+      leg.position.set(x, y, z);
+      g.add(leg);
+    });
+
+    // TV stand + TV
+    const tvStand = box(2, 0.6, 0.5, wdM);
+    tvStand.position.set(-4, 0.3, 3.5);
+    g.add(tvStand);
+    const tv = box(2.2, 1.4, 0.08, mat(0x111111, { r: 0.2, m: 0.3 }));
+    tv.position.set(-4, 1.5, 3.5);
+    g.add(tv);
+    // Screen glow
+    const screen = box(2.0, 1.2, 0.01, mat(0x334466, { r: 0.1 }));
+    screen.position.set(-4, 1.5, 3.46);
+    g.add(screen);
+
+    // Bookshelf (right side)
+    const shelf = box(0.8, 2.5, 0.4, wdM);
+    shelf.position.set(-1, 1.25, -3.8);
+    g.add(shelf);
+    // Shelf dividers
+    for (let i = 0; i < 4; i++) {
+      const sd = box(0.75, 0.04, 0.38, wdM);
+      sd.position.set(-1, 0.15 + i * 0.7, -3.8);
+      g.add(sd);
+    }
+    // Books (colored blocks on shelves)
+    const bookColors = [0xcc4444, 0x4466cc, 0x44aa66, 0xcc8844, 0x8844aa];
+    for (let s = 0; s < 3; s++) {
+      for (let b = 0; b < 3; b++) {
+        const bk = box(0.15, 0.45, 0.25, mat(bookColors[(s*3+b) % bookColors.length]));
+        bk.position.set(-1.2 + b * 0.22, 0.4 + s * 0.7, -3.8);
+        g.add(bk);
+      }
+    }
+
+    // Floor lamp (far left)
+    const pole = cyl(0.04, 0.04, 2.2, 8, mat(0x888888, { m: 0.5, r: 0.3 }));
+    pole.position.set(-7, 1.1, 3);
+    g.add(pole);
+    const shade = cyl(0.3, 0.45, 0.35, 12, mat(0xfff8e0, { t: true, o: 0.8 }));
+    shade.position.set(-7, 2.4, 3);
+    g.add(shade);
+    // Lamp glow
+    const glow = new THREE.PointLight(0xffe8c0, 0.3, 4);
+    glow.position.set(-7, 2.4, 3);
+    g.add(glow);
+
+    // Supply vent (floor, on inner wall)
+    this.addVent(g, -0.3, 0.2, 2, 0.6, 0.3, false);
+    // Return vent (high on wall)
+    this.addVent(g, -4, 3.5, 4.8, 0.8, 0.3, true);
+
+    parent.add(g);
+  }
+
+  // ── Kitchen (right, ground) ────────────────────────
+  buildKitchen(parent) {
+    const g = new THREE.Group();
+    const cabM = mat(P.cabinet);
+    const cntM = mat(P.counter, { r: 0.4 });
+    const appM = mat(P.appliance, { r: 0.25, m: 0.5 });
+    const wdM = mat(P.wood, { r: 0.6 });
+
+    // Lower cabinets (along back wall)
+    const lowerCab = box(6, 1.1, 0.8, cabM);
+    lowerCab.position.set(5, 0.55, -4.2);
+    g.add(lowerCab);
+    // Cabinet doors
+    for (let i = 0; i < 4; i++) {
+      const door = box(1.3, 0.95, 0.04, mat(P.cabinet));
+      door.position.set(2.8 + i * 1.45, 0.55, -3.78);
+      g.add(door);
+      // Knobs
+      const knob = cyl(0.03, 0.03, 0.06, 8, mat(0xaaaaaa, { m: 0.6 }));
+      knob.position.set(2.8 + i * 1.45 + 0.35, 0.55, -3.75);
+      knob.rotation.x = Math.PI / 2;
+      g.add(knob);
+    }
+
+    // Countertop
+    const counter = box(6.2, 0.1, 0.9, cntM);
+    counter.position.set(5, 1.15, -4.15);
+    g.add(counter);
+
+    // Upper cabinets
+    const upperCab = box(4, 0.9, 0.5, cabM);
+    upperCab.position.set(4.5, 3.0, -4.4);
+    g.add(upperCab);
+
+    // Stove
+    const stove = box(0.8, 1.1, 0.7, appM);
+    stove.position.set(4, 0.55, -4.25);
+    g.add(stove);
+    // Burners
+    for (let i = 0; i < 2; i++) {
+      for (let j = 0; j < 2; j++) {
+        const burner = cyl(0.12, 0.12, 0.02, 16, mat(0x333333, { r: 0.4 }));
+        burner.position.set(3.8 + i * 0.35, 1.13, -4.1 + j * 0.3 - 0.15);
+        g.add(burner);
+      }
+    }
+
+    // Range hood
+    const hood = box(1.2, 0.35, 0.6, appM);
+    hood.position.set(4, 2.3, -4.3);
+    g.add(hood);
+    const hoodTrap = box(0.9, 0.08, 0.5, mat(0xbbbbbb, { m: 0.4 }));
+    hoodTrap.position.set(4, 2.1, -4.3);
+    g.add(hoodTrap);
+
+    // Refrigerator
+    const fridge = box(1, 2.2, 0.9, appM);
+    fridge.position.set(7.2, 1.1, -4.1);
+    g.add(fridge);
+    // Fridge handle
+    const handle = box(0.04, 0.8, 0.06, mat(0x999999, { m: 0.6 }));
+    handle.position.set(6.8, 1.3, -3.6);
+    g.add(handle);
+
+    // Sink (in counter)
+    const sink = box(0.6, 0.15, 0.4, mat(0xcccccc, { m: 0.5, r: 0.2 }));
+    sink.position.set(5.5, 1.1, -4.15);
+    g.add(sink);
+    // Faucet
+    const faucetBase = cyl(0.03, 0.04, 0.35, 8, mat(0xcccccc, { m: 0.7 }));
+    faucetBase.position.set(5.5, 1.35, -4.4);
+    g.add(faucetBase);
+    const faucetArm = box(0.03, 0.03, 0.25, mat(0xcccccc, { m: 0.7 }));
+    faucetArm.position.set(5.5, 1.52, -4.25);
+    g.add(faucetArm);
+
+    // Kitchen island
+    const island = box(2, 1.2, 1.2, cabM);
+    island.position.set(4, 0.6, 0);
+    g.add(island);
+    const islandTop = box(2.2, 0.08, 1.3, cntM);
+    islandTop.position.set(4, 1.22, 0);
+    g.add(islandTop);
+
+    // Bar stools
+    for (let i = 0; i < 2; i++) {
+      const seat = cyl(0.25, 0.22, 0.08, 12, wdM);
+      seat.position.set(3.5 + i * 1, 0.9, 1);
+      g.add(seat);
+      const stoolLeg = cyl(0.04, 0.04, 0.85, 6, mat(0x888888, { m: 0.4 }));
+      stoolLeg.position.set(3.5 + i * 1, 0.45, 1);
+      g.add(stoolLeg);
+    }
+
+    // Tile backsplash
+    const splash = box(6, 1.5, 0.06, mat(P.tile, { r: 0.3 }));
+    splash.position.set(5, 1.9, -4.72);
+    g.add(splash);
+
+    // Supply vent
+    this.addVent(g, 0.3, 0.2, 0, 0.6, 0.3, false);
+
+    parent.add(g);
+  }
+
+  // ── Bedroom (left, upper) ──────────────────────────
+  buildBedroom(parent) {
+    const g = new THREE.Group();
+    const wdM = mat(P.wood, { r: 0.6 });
+    const bedM = mat(P.bed);
+
+    // Bed
+    const bedBase = box(2.4, 0.45, 3.2, wdM);
+    bedBase.position.set(-5, 4.35, -1.5);
+    g.add(bedBase);
+    // Mattress
+    const mattress = box(2.2, 0.25, 3, mat(0xf0f0f0, { r: 0.9 }));
+    mattress.position.set(-5, 4.7, -1.5);
+    g.add(mattress);
+    // Blanket
+    const blanket = box(2.2, 0.1, 2.2, bedM);
+    blanket.position.set(-5, 4.88, -1.1);
+    g.add(blanket);
+    // Pillows
+    const pillowM = mat(P.pillow, { r: 0.9 });
+    const p1 = box(0.9, 0.15, 0.5, pillowM);
+    p1.position.set(-5.4, 4.88, -2.7);
+    g.add(p1);
+    const p2 = box(0.9, 0.15, 0.5, pillowM);
+    p2.position.set(-4.6, 4.88, -2.7);
+    g.add(p2);
+    // Headboard
+    const headboard = box(2.6, 1.2, 0.15, wdM);
+    headboard.position.set(-5, 5, -3.1);
+    g.add(headboard);
+
+    // Nightstands
+    for (const x of [-6.5, -3.5]) {
+      const ns = box(0.6, 0.6, 0.5, wdM);
+      ns.position.set(x, 4.3, -2.8);
+      g.add(ns);
+      // Drawer
+      const dr = box(0.5, 0.2, 0.04, mat(P.cabinet));
+      dr.position.set(x, 4.35, -2.52);
+      g.add(dr);
+    }
+
+    // Desk lamp
+    const lampBase = cyl(0.12, 0.15, 0.08, 12, mat(0x888888, { m: 0.5 }));
+    lampBase.position.set(-6.5, 4.65, -2.8);
+    g.add(lampBase);
+    const lampStem = cyl(0.02, 0.02, 0.5, 8, mat(0x888888, { m: 0.5 }));
+    lampStem.position.set(-6.5, 4.95, -2.8);
+    g.add(lampStem);
+    const lampShade = cyl(0.12, 0.2, 0.18, 12, mat(0xffeedd, { t: true, o: 0.85 }));
+    lampShade.position.set(-6.5, 5.3, -2.8);
+    g.add(lampShade);
+
+    // Dresser
+    const dresser = box(1.6, 1.1, 0.6, wdM);
+    dresser.position.set(-2, 4.55, 3.5);
+    g.add(dresser);
+    for (let i = 0; i < 3; i++) {
+      const dd = box(1.4, 0.28, 0.04, mat(P.cabinet));
+      dd.position.set(-2, 4.2 + i * 0.33, 3.82);
+      g.add(dd);
+      const dh = box(0.2, 0.04, 0.04, mat(0xaaaaaa, { m: 0.5 }));
+      dh.position.set(-2, 4.2 + i * 0.33, 3.86);
+      g.add(dh);
+    }
+
+    // Closet (recessed box in side wall)
+    const closet = box(2, 3, 0.1, mat(P.wallInner));
+    closet.position.set(-7.85, 5.5, 2);
+    g.add(closet);
+    // Closet door
+    const cDoor = box(0.9, 2.6, 0.06, mat(P.wall));
+    cDoor.position.set(-7.82, 5.4, 1.5);
+    g.add(cDoor);
+    const cDoor2 = box(0.9, 2.6, 0.06, mat(P.wall));
+    cDoor2.position.set(-7.82, 5.4, 2.5);
+    g.add(cDoor2);
+
+    // Rug
+    const rug = box(2, 0.03, 1.5, mat(0x6b6e99, { r: 0.9 }));
+    rug.position.set(-5, 4.14, 1);
+    g.add(rug);
+
+    // Supply vent
+    this.addVent(g, -0.3, 4.2, 2, 0.6, 0.3, false);
+
+    parent.add(g);
+  }
+
+  // ── Bathroom (right, upper) ────────────────────────
+  buildBathroom(parent) {
+    const g = new THREE.Group();
+    const tileM = mat(P.tile, { r: 0.3 });
+    const porcM = mat(P.porcelain, { r: 0.3 });
+
+    // Tile floor section
+    const tf = box(7.5, 0.06, 9.5, tileM);
+    tf.position.set(4, 4.16, 0);
+    g.add(tf);
+
+    // Bathtub / shower (back left of bathroom)
+    const tub = box(2.5, 0.8, 1.2, porcM);
+    tub.position.set(2.5, 4.5, -3.5);
+    g.add(tub);
+    // Tub inside (darker)
+    const tubIn = box(2.2, 0.6, 1, mat(0xe8e8e8));
+    tubIn.position.set(2.5, 4.55, -3.5);
+    g.add(tubIn);
+
+    // Shower glass panel
+    const glassM = mat(P.glass, { t: true, o: 0.18, r: 0.05 });
+    const showerGlass = box(0.04, 2.5, 1.2, glassM);
+    showerGlass.position.set(3.8, 5.35, -3.5);
+    g.add(showerGlass);
+    // Shower head
+    const shHead = cyl(0.12, 0.1, 0.04, 12, mat(0xcccccc, { m: 0.7 }));
+    shHead.position.set(2.5, 7.2, -4.3);
+    g.add(shHead);
+    const shArm = box(0.04, 0.04, 0.4, mat(0xcccccc, { m: 0.7 }));
+    shArm.position.set(2.5, 7.2, -4.5);
+    g.add(shArm);
+    // Tile wall behind shower
+    const shTile = box(2.5, 3, 0.06, mat(0xc8dce8, { r: 0.25 }));
+    shTile.position.set(2.5, 5.6, -4.72);
+    g.add(shTile);
+
+    // Toilet
+    const toiletBase = box(0.5, 0.5, 0.6, porcM);
+    toiletBase.position.set(6, 4.38, -3.5);
+    g.add(toiletBase);
+    const toiletBowl = cyl(0.22, 0.25, 0.2, 12, porcM);
+    toiletBowl.position.set(6, 4.7, -3.3);
+    g.add(toiletBowl);
+    const toiletTank = box(0.45, 0.6, 0.25, porcM);
+    toiletTank.position.set(6, 4.8, -3.8);
+    g.add(toiletTank);
+    const toiletLid = box(0.42, 0.04, 0.35, porcM);
+    toiletLid.position.set(6, 4.85, -3.35);
+    g.add(toiletLid);
+
+    // Vanity
+    const vanity = box(1.6, 1.0, 0.6, mat(P.cabinet));
+    vanity.position.set(6, 4.5, 2);
+    g.add(vanity);
+    // Vanity top
+    const vTop = box(1.7, 0.06, 0.7, mat(P.counter, { r: 0.35 }));
+    vTop.position.set(6, 5.03, 2);
+    g.add(vTop);
+    // Sink bowl
+    const sinkB = cyl(0.2, 0.25, 0.1, 12, porcM);
+    sinkB.position.set(6, 5, 2);
+    g.add(sinkB);
+    // Mirror
+    const mirror = box(1.4, 1.2, 0.04, mat(0xddeeff, { r: 0.05, m: 0.6 }));
+    mirror.position.set(6, 6, 2);
+    g.add(mirror);
+
+    // Exhaust fan (ceiling disc)
+    const fanHousing = cyl(0.35, 0.35, 0.08, 16, mat(P.porcelain, { r: 0.4 }));
+    fanHousing.position.set(4, 7.92, -1);
+    g.add(fanHousing);
+    const fanGrill = cyl(0.3, 0.3, 0.02, 16, mat(0xdddddd, { r: 0.3 }));
+    fanGrill.position.set(4, 7.88, -1);
+    g.add(fanGrill);
+
+    // Towel rack
+    const rack = box(0.04, 0.04, 0.8, mat(0xcccccc, { m: 0.6 }));
+    rack.position.set(7.85, 5.5, 0);
+    g.add(rack);
+    // Towel (draped box)
+    const towel = box(0.02, 0.6, 0.5, mat(0x5588aa, { r: 0.9 }));
+    towel.position.set(7.82, 5.2, 0);
+    g.add(towel);
+
+    parent.add(g);
+  }
+
+  // ── Attic / HVAC ──────────────────────────────────
+  buildAttic(parent) {
+    const g = new THREE.Group();
+    const ductM = mat(0xaabbcc, { r: 0.35, m: 0.5 });
+
+    // HVAC air handler
+    const hvac = box(2, 1.5, 1.5, mat(P.appliance, { r: 0.3, m: 0.4 }));
+    hvac.position.set(-3, 8.85, 0);
+    g.add(hvac);
+    addEdges(hvac, 0x00e5ff, 0.25);
+    // Label
+    const labelGeo = new THREE.PlaneGeometry(1.5, 0.3);
+    const labelCanvas = document.createElement('canvas');
+    labelCanvas.width = 256; labelCanvas.height = 48;
+    const lCtx = labelCanvas.getContext('2d');
+    lCtx.fillStyle = '#1a2a3a';
+    lCtx.fillRect(0, 0, 256, 48);
+    lCtx.fillStyle = '#00e5ff';
+    lCtx.font = 'bold 22px sans-serif';
+    lCtx.textAlign = 'center';
+    lCtx.fillText('AIR HANDLER', 128, 32);
+    const labelTex = new THREE.CanvasTexture(labelCanvas);
+    const labelMat = new THREE.MeshBasicMaterial({ map: labelTex, transparent: true });
+    const labelMesh = new THREE.Mesh(labelGeo, labelMat);
+    labelMesh.position.set(-3, 9.2, 0.76);
+    g.add(labelMesh);
+
+    // Fan representation
+    const fan = cyl(0.4, 0.4, 0.05, 16, mat(0x445566, { m: 0.5 }));
+    fan.position.set(-3, 9.6, 0);
+    fan.rotation.x = Math.PI / 2;
+    this.hvacFan = fan;
+    g.add(fan);
+    // Fan blades
+    const bladeG = new THREE.Group();
+    for (let i = 0; i < 4; i++) {
+      const blade = box(0.08, 0.35, 0.02, mat(0x667788, { m: 0.4 }));
+      blade.position.set(0, 0.17, 0);
+      const wrapper = new THREE.Group();
+      wrapper.add(blade);
+      wrapper.rotation.z = (Math.PI / 2) * i;
+      bladeG.add(wrapper);
+    }
+    bladeG.position.copy(fan.position);
+    bladeG.position.z += 0.05;
+    this.fanBlades = bladeG;
+    g.add(bladeG);
+
+    // Main duct trunk
+    const trunk = box(10, 0.6, 0.6, ductM);
+    trunk.position.set(1, 8.5, 0);
+    g.add(trunk);
+    addEdges(trunk, 0x00aacc, 0.15);
+    // Duct seams
+    for (let i = 0; i < 5; i++) {
+      const seam = box(0.03, 0.62, 0.62, mat(0x8899aa, { m: 0.4 }));
+      seam.position.set(-2 + i * 2.5, 8.5, 0);
+      g.add(seam);
+    }
+
+    // Branch ducts going down to rooms
+    const branchPositions = [[-4, 8.2, 0], [4, 8.2, 0], [-4, 8.2, 2], [4, 8.2, -2]];
+    branchPositions.forEach(([x, y, z]) => {
+      const branch = cyl(0.2, 0.2, 0.5, 8, ductM);
+      branch.position.set(x, y, z);
+      g.add(branch);
+      // Joint ring
+      const joint = cyl(0.25, 0.25, 0.06, 12, mat(0x99aabb, { m: 0.5 }));
+      joint.position.set(x, y + 0.25, z);
+      g.add(joint);
+    });
+
+    // Insulation (wavy blocks on attic floor)
+    const insM = mat(0xeedd99, { r: 1.0 });
+    for (let i = 0; i < 6; i++) {
+      const ins = box(2.2, 0.3, 9, insM);
+      ins.position.set(-6.5 + i * 2.6, 8.25, 0);
+      ins.scale.y = 0.8 + Math.random() * 0.4;
+      g.add(ins);
+    }
+
+    parent.add(g);
+  }
+
+  // ── Crawlspace details ─────────────────────────────
+  buildCrawlspaceDetails(parent) {
+    const g = new THREE.Group();
+    const pipeM = mat(0x88aacc, { r: 0.3, m: 0.5 });
+
+    // Pipes running horizontally
+    const pipe1 = cyl(0.08, 0.08, 14, 8, pipeM);
+    pipe1.rotation.z = Math.PI / 2;
+    pipe1.position.set(0, -0.6, -2);
+    g.add(pipe1);
+    const pipe2 = cyl(0.06, 0.06, 14, 8, mat(0x99bb99, { r: 0.3, m: 0.4 }));
+    pipe2.rotation.z = Math.PI / 2;
+    pipe2.position.set(0, -0.8, 2);
+    g.add(pipe2);
+
+    // Electrical conduit
+    const conduit = cyl(0.03, 0.03, 10, 6, mat(0xdddddd, { m: 0.4 }));
+    conduit.rotation.z = Math.PI / 2;
+    conduit.position.set(0, -0.3, -3.5);
+    g.add(conduit);
+
+    parent.add(g);
+  }
+
+  // ── Vent helper ────────────────────────────────────
+  addVent(parent, x, y, z, w, h, isReturn) {
+    const ventM = mat(isReturn ? 0xcccccc : 0xdddddd, { r: 0.3, m: 0.3 });
+    const vent = box(w, h, 0.04, ventM);
+    vent.position.set(x, y, z);
+    parent.add(vent);
+    // Slats
+    const slats = 4;
+    for (let i = 0; i < slats; i++) {
+      const slat = box(w * 0.85, 0.02, 0.02, ventM);
+      slat.position.set(x, y - h * 0.35 + i * (h * 0.7 / (slats - 1)), z + 0.02);
+      parent.add(slat);
+    }
+  }
+
+  // ════════════════════════════════════════════════════
+  //  ROOM HIT BOXES (for raycasting)
+  // ════════════════════════════════════════════════════
+  buildRoomHitBoxes() {
+    const hitM = new THREE.MeshBasicMaterial({
+      transparent: true, opacity: 0, depthWrite: false,
+    });
+    const rooms = [
+      { id: 'living',     pos: [-4, 2, 0],     size: [7.5, 3.8, 9.5] },
+      { id: 'kitchen',    pos: [4, 2, 0],      size: [7.5, 3.8, 9.5] },
+      { id: 'bedroom',    pos: [-4, 6, 0],     size: [7.5, 3.8, 9.5] },
+      { id: 'bathroom',   pos: [4, 6, 0],      size: [7.5, 3.8, 9.5] },
+      { id: 'attic',      pos: [0, 9, 0],      size: [15, 2.5, 9.5] },
+      { id: 'crawlspace', pos: [0, -1, 0],     size: [15, 1.8, 9.5] },
+    ];
+    rooms.forEach(({ id, pos, size }) => {
+      const g = new THREE.BoxGeometry(...size);
+      const m = new THREE.Mesh(g, hitM);
+      m.position.set(...pos);
+      m.userData.roomId = id;
+      this.roomHitBoxes.push(m);
+      this.scene.add(m);
+    });
+  }
+
+  // ════════════════════════════════════════════════════
+  //  AIR FLOW PARTICLES
+  // ════════════════════════════════════════════════════
+  initAirParticles() {
+    // We create flow paths for each room + ambient
+    this.flowDefs = this.defineAllFlows();
+    this.activeFlowIds = ['ambient'];
+    this.particles = [];
+
+    const MAX = 900;
+    this.pPositions = new Float32Array(MAX * 3);
+    this.pColors = new Float32Array(MAX * 3);
+    this.pSizes = new Float32Array(MAX);
+
+    const bg = new THREE.BufferGeometry();
+    bg.setAttribute('position', new THREE.BufferAttribute(this.pPositions, 3));
+    bg.setAttribute('color', new THREE.BufferAttribute(this.pColors, 3));
+    bg.setAttribute('size', new THREE.BufferAttribute(this.pSizes, 1));
+
+    this.pMat = new THREE.PointsMaterial({
+      size: 0.14,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.75,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      sizeAttenuation: true,
+    });
+    this.pMesh = new THREE.Points(bg, this.pMat);
+    this.scene.add(this.pMesh);
+
+    // Spawn initial particles
+    for (let i = 0; i < MAX; i++) {
+      this.particles.push({
+        active: false, flowId: null, t: 0, speed: 0,
+        jx: 0, jy: 0, jz: 0, life: 0, maxLife: 0,
+      });
+    }
+
+    this.spawnForFlows(this.activeFlowIds);
+  }
+
+  defineAllFlows() {
+    const defs = {};
+
+    // Ambient — gentle particles throughout the house
+    defs.ambient = {
+      count: 120,
+      paths: [
+        { from: [-4,1,0], to: [-4,3.5,0], color: [0,0.87,1], spread: 3 },
+        { from: [4,1,0], to: [4,3.5,0], color: [1,0.67,0.27], spread: 3 },
+        { from: [-4,5,0], to: [-4,7.5,0], color: [0,0.87,1], spread: 3 },
+        { from: [4,5,0], to: [4,7.5,0], color: [0.8,0.87,1], spread: 3 },
+        { from: [0,8.3,0], to: [0,9.5,0], color: [1,0.8,0.27], spread: 5 },
+      ],
+    };
+
+    // Living room flows
+    defs.living = {
+      count: 200,
+      paths: [
+        // Supply: vent → rises → spreads across room
+        { from: [-0.3,0.3,2], to: [-4,2.5,0], color: [0,0.87,1], spread: 1.5 },
+        { from: [-4,2.5,0], to: [-4,3.5,0], color: [0,0.87,1], spread: 2 },
+        // Return: room → return vent
+        { from: [-6,2,0], to: [-4,3.5,4.8], color: [1,0.67,0.27], spread: 1.5 },
+        { from: [-2,2,0], to: [-4,3.5,4.8], color: [1,0.67,0.27], spread: 1.5 },
+        // Dust floating
+        { from: [-6,0.5,-2], to: [-2,1.5,3], color: [0.87,0.8,0.6], spread: 2 },
+      ],
+    };
+
+    // Kitchen flows
+    defs.kitchen = {
+      count: 200,
+      paths: [
+        // Cooking exhaust rises from stove
+        { from: [4,1.2,-4], to: [4,2.3,-4.3], color: [1,0.4,0.27], spread: 0.4 },
+        { from: [4,2.3,-4.3], to: [4,3.5,-3], color: [1,0.4,0.27], spread: 1.5 },
+        // Range hood capture
+        { from: [3,2,-3.5], to: [4,2.3,-4.3], color: [1,0.67,0.27], spread: 0.8 },
+        { from: [5,2,-3.5], to: [4,2.3,-4.3], color: [1,0.67,0.27], spread: 0.8 },
+        // Supply
+        { from: [0.3,0.3,0], to: [4,1.5,0], color: [0,0.87,1], spread: 1.5 },
+      ],
+    };
+
+    // Bedroom flows
+    defs.bedroom = {
+      count: 180,
+      paths: [
+        // Supply from vent
+        { from: [-0.3,4.3,2], to: [-4,5.5,0], color: [0,0.87,1], spread: 2 },
+        // Circulation loop
+        { from: [-6,5,0], to: [-4,7.2,0], color: [0.67,0.87,1], spread: 2.5 },
+        { from: [-4,7.2,0], to: [-2,5,0], color: [0.67,0.87,1], spread: 2 },
+        // Dust/VOC near bed height
+        { from: [-6,4.8,-1.5], to: [-3,5.5,2], color: [0.87,0.8,0.6], spread: 1.5 },
+      ],
+    };
+
+    // Bathroom flows
+    defs.bathroom = {
+      count: 200,
+      paths: [
+        // Steam from shower
+        { from: [2.5,5.5,-3.5], to: [3,7.5,-2], color: [0.8,0.87,1], spread: 1 },
+        { from: [3,7.5,-2], to: [4,7.8,0], color: [0.8,0.87,1], spread: 1.5 },
+        // Exhaust fan draw
+        { from: [3,6,0], to: [4,7.9,-1], color: [1,0.67,0.27], spread: 1.5 },
+        { from: [6,6,0], to: [4,7.9,-1], color: [1,0.67,0.27], spread: 1.5 },
+        // Under-door air
+        { from: [0.2,4.2,3], to: [4,4.5,0], color: [0,0.87,1], spread: 1 },
+      ],
+    };
+
+    // Attic
+    defs.attic = {
+      count: 180,
+      paths: [
+        // Air through duct trunk
+        { from: [-3,8.5,0], to: [6,8.5,0], color: [0,0.87,1], spread: 0.3 },
+        // Duct leaks
+        { from: [-1,8.5,0], to: [-1,9.5,1], color: [1,0.27,0.53], spread: 0.5 },
+        { from: [3,8.5,0], to: [3,9.5,-1], color: [1,0.27,0.53], spread: 0.5 },
+        // Hot attic air
+        { from: [-6,8.5,-3], to: [6,10,3], color: [1,0.4,0.27], spread: 3 },
+      ],
+    };
+
+    // Crawlspace
+    defs.crawlspace = {
+      count: 180,
+      paths: [
+        // Ground moisture rising
+        { from: [-5,-1.9,0], to: [-5,-0.3,0], color: [0.8,0.87,1], spread: 2 },
+        { from: [5,-1.9,0], to: [5,-0.3,0], color: [0.8,0.87,1], spread: 2 },
+        // Radon seeping
+        { from: [0,-1.9,0], to: [0,-0.3,0], color: [0.67,0.4,1], spread: 3 },
+        // Stack effect rising into house
+        { from: [-3,-0.5,0], to: [-3,0.5,0], color: [1,0.67,0.27], spread: 2 },
+        { from: [3,-0.5,0], to: [3,0.5,0], color: [1,0.67,0.27], spread: 2 },
+      ],
+    };
+
+    return defs;
+  }
+
+  spawnForFlows(flowIds) {
+    // Deactivate all
+    this.particles.forEach(p => { p.active = false; });
+
+    let idx = 0;
+    flowIds.forEach(fid => {
+      const def = this.flowDefs[fid];
+      if (!def) return;
+      const perPath = Math.floor(def.count / def.paths.length);
+      def.paths.forEach(path => {
+        for (let i = 0; i < perPath && idx < this.particles.length; i++, idx++) {
+          const p = this.particles[idx];
+          p.active = true;
+          p.flowId = fid;
+          p.pathDef = path;
+          p.t = Math.random();
+          p.speed = 0.15 + Math.random() * 0.25;
+          p.jx = (Math.random() - 0.5) * path.spread;
+          p.jy = (Math.random() - 0.5) * path.spread * 0.5;
+          p.jz = (Math.random() - 0.5) * path.spread;
+          p.life = 0;
+          p.maxLife = 2 + Math.random() * 4;
+        }
+      });
+    });
+  }
+
+  updateParticles(dt) {
+    const pos = this.pPositions;
+    const col = this.pColors;
+    const sizes = this.pSizes;
+
+    for (let i = 0; i < this.particles.length; i++) {
+      const p = this.particles[i];
+      if (!p.active) {
+        pos[i*3] = pos[i*3+1] = pos[i*3+2] = 0;
+        sizes[i] = 0;
+        continue;
+      }
+
+      p.t += p.speed * dt;
+      p.life += dt;
+
+      if (p.t > 1) {
+        p.t -= 1;
+        p.jx = (Math.random() - 0.5) * p.pathDef.spread;
+        p.jy = (Math.random() - 0.5) * p.pathDef.spread * 0.5;
+        p.jz = (Math.random() - 0.5) * p.pathDef.spread;
+        p.life = 0;
+        p.maxLife = 2 + Math.random() * 4;
+      }
+
+      const { from, to, color } = p.pathDef;
+      const t = p.t;
+      // Cubic ease for organic motion
+      const et = t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2;
+      pos[i*3]   = from[0] + (to[0] - from[0]) * et + p.jx * Math.sin(p.life * 1.5);
+      pos[i*3+1] = from[1] + (to[1] - from[1]) * et + p.jy * Math.sin(p.life * 1.2 + 1);
+      pos[i*3+2] = from[2] + (to[2] - from[2]) * et + p.jz * Math.cos(p.life * 1.3);
+
+      // Fade in/out
+      const fade = Math.min(t * 4, 1) * Math.min((1 - t) * 4, 1);
+      col[i*3]   = color[0] * fade;
+      col[i*3+1] = color[1] * fade;
+      col[i*3+2] = color[2] * fade;
+
+      sizes[i] = (0.08 + fade * 0.12);
+    }
+
+    this.pMesh.geometry.attributes.position.needsUpdate = true;
+    this.pMesh.geometry.attributes.color.needsUpdate = true;
+    this.pMesh.geometry.attributes.size.needsUpdate = true;
+  }
+
+  // ════════════════════════════════════════════════════
+  //  INTERACTION
+  // ════════════════════════════════════════════════════
+  onDown(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    this._pointerDown.set(e.clientX, e.clientY);
+    this._didDrag = false;
+  }
+
+  onUp(e) {
+    const dx = e.clientX - this._pointerDown.x;
+    const dy = e.clientY - this._pointerDown.y;
+    if (Math.sqrt(dx*dx + dy*dy) > 6) return; // was a drag
+
+    const rect = this.canvas.getBoundingClientRect();
+    this.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hits = this.raycaster.intersectObjects(this.roomHitBoxes);
+
+    if (hits.length > 0) {
+      const roomId = hits[0].object.userData.roomId;
+      if (roomId === this.activeRoom) {
+        this.resetView();
+      } else {
+        this.focusRoom(roomId);
+      }
+    } else {
+      this.resetView();
+    }
+  }
+
+  focusRoom(roomId) {
+    const room = ROOMS[roomId];
+    if (!room) return;
+    this.activeRoom = roomId;
+
+    // Camera transition targets
+    this.camTarget = room.camOffset.clone();
+    this.lookTarget = room.lookAt.clone();
+
+    // Update overlay
+    if (this.overlay) {
+      let legendHTML = '<div class="house-vis__overlay-legend">';
+      room.flows.forEach(f => {
+        legendHTML += `<span style="--fc:${f.hex}">${f.label}</span>`;
+      });
+      legendHTML += '</div>';
+
+      this.overlay.innerHTML =
+        `<h3>${room.name}</h3>` +
+        `<p>${room.desc}</p>` +
+        legendHTML +
+        `<a href="${room.link}">Learn More \u2192</a>`;
+      this.overlay.classList.add('active');
+    }
+
+    // Update info panel
+    if (this.infoPanel) {
+      this.infoPanel.innerHTML =
+        `<div class="house-vis__info-detail">` +
+        `<h3>${room.name}</h3>` +
+        `<p>${room.desc}</p>` +
+        `<a href="${room.link}">Learn More \u2192</a>` +
+        `</div>`;
+    }
+
+    // Switch air flow
+    this.activeFlowIds = [roomId];
+    this.spawnForFlows(this.activeFlowIds);
+
+    // Hide hint
+    if (this.hintEl) this.hintEl.style.opacity = '0';
+
+    // Highlight room edges
+    this.highlightRoom(roomId);
+  }
+
+  resetView() {
+    this.activeRoom = null;
+    this.camTarget = this.defaultCam.clone();
+    this.lookTarget = this.defaultLook.clone();
+
+    if (this.overlay) this.overlay.classList.remove('active');
+    if (this.infoPanel) {
+      this.infoPanel.innerHTML =
+        `<div class="house-vis__info-default"><p>Tap any room to explore its air quality concerns.</p></div>`;
+    }
+
+    this.activeFlowIds = ['ambient'];
+    this.spawnForFlows(this.activeFlowIds);
+
+    if (this.hintEl) this.hintEl.style.opacity = '1';
+    this.clearHighlight();
+  }
+
+  // ── Room highlight ─────────────────────────────────
+  highlightRoom(roomId) {
+    this.clearHighlight();
+    const room = ROOMS[roomId];
+    if (!room) return;
+
+    const hitBox = this.roomHitBoxes.find(h => h.userData.roomId === roomId);
+    if (!hitBox) return;
+
+    const edges = new THREE.EdgesGeometry(hitBox.geometry);
+    const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({
+      color: room.color, transparent: true, opacity: 0.6,
+    }));
+    line.position.copy(hitBox.position);
+    line.userData._highlight = true;
+    this.scene.add(line);
+    this._highlightLine = line;
+  }
+
+  clearHighlight() {
+    if (this._highlightLine) {
+      this.scene.remove(this._highlightLine);
+      this._highlightLine.geometry.dispose();
+      this._highlightLine.material.dispose();
+      this._highlightLine = null;
+    }
+  }
+
+  // ── Toggle roof ────────────────────────────────────
+  toggleRoof() {
+    this.roofVisible = !this.roofVisible;
+    if (this.roofGroup) this.roofGroup.visible = this.roofVisible;
+  }
+
+  // ════════════════════════════════════════════════════
+  //  ANIMATION LOOP
+  // ════════════════════════════════════════════════════
+  animate() {
+    requestAnimationFrame(() => this.animate());
+    const dt = Math.min(this.clock.getDelta(), 0.05);
+
+    // Smooth camera transition
+    if (this.camTarget) {
+      this.camera.position.lerp(this.camTarget, 0.045);
+      this.controls.target.lerp(this.lookTarget, 0.045);
+      if (this.camera.position.distanceTo(this.camTarget) < 0.08) {
+        this.camTarget = null;
+      }
+    }
+
+    this.controls.update();
+
+    // Rotate fan blades
+    if (this.fanBlades) {
+      this.fanBlades.rotation.y += dt * 6;
+    }
+
+    // Pulse highlight
+    if (this._highlightLine) {
+      this._highlightLine.material.opacity = 0.35 + Math.sin(Date.now() * 0.004) * 0.25;
+    }
+
+    // Air particles
+    this.updateParticles(dt);
+
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  // ── Resize ─────────────────────────────────────────
+  resize() {
+    const W = this.canvas.clientWidth;
+    const H = this.canvas.clientHeight;
+    if (W === 0 || H === 0) return;
+    this.renderer.setSize(W, H, false);
+    this.camera.aspect = W / H;
+    this.camera.updateProjectionMatrix();
+  }
+}
+
+// ── Boot ──────────────────────────────────────────────
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => new HouseExplorer());
+} else {
+  new HouseExplorer();
+}
