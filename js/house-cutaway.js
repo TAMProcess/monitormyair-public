@@ -32,8 +32,8 @@ const P = {
 const ROOMS = {
   living: {
     name: 'Living Room',
-    desc: 'Supply vents push conditioned air in while return ducts pull it back. Without proper filtration, allergens, pet dander, and VOCs circulate continuously.',
-    link: 'pages/indoor-air-quality-101.html',
+    desc: 'Supply vents push conditioned air in while return ducts pull it back. Dust, pet dander, and VOCs collect behind furniture and inside ductwork — feeding hidden mold colonies you never see.',
+    link: 'pages/hidden-mold.html',
     color: 0x4488ff,
     camOffset: new THREE.Vector3(6, 3, 12),
     lookAt: new THREE.Vector3(-4, 2, 0),
@@ -45,8 +45,8 @@ const ROOMS = {
   },
   kitchen: {
     name: 'Kitchen',
-    desc: 'Cooking generates VOCs, CO, and particulate matter. Gas stoves produce NO\u2082. Range hoods exhaust some pollutants, but much recirculates.',
-    link: 'pages/indoor-air-quality-101.html',
+    desc: 'Cooking generates VOCs, CO, and particulate matter. Moisture under the sink breeds mold. Grease in exhaust ducts traps spores. Without proper ventilation, contamination spreads to every room.',
+    link: 'pages/how-to-clean-mold.html',
     color: 0xff8844,
     camOffset: new THREE.Vector3(-4, 3, 14),
     lookAt: new THREE.Vector3(4, 2, 0),
@@ -58,8 +58,8 @@ const ROOMS = {
   },
   bedroom: {
     name: 'Bedroom',
-    desc: 'You spend 8 hrs breathing here. Poor filtration means allergens, dust mites, and VOCs from furniture off-gassing circulate all night.',
-    link: 'pages/indoor-air-quality-101.html',
+    desc: 'You spend 8 hours breathing here. Poor filtration means dust mites, allergens, and VOCs from furniture off-gassing circulate all night — triggering headaches, congestion, and fatigue.',
+    link: 'pages/is-mold-making-me-sick.html',
     color: 0x5588ff,
     camOffset: new THREE.Vector3(6, 7, 12),
     lookAt: new THREE.Vector3(-4, 6, 0),
@@ -71,8 +71,8 @@ const ROOMS = {
   },
   bathroom: {
     name: 'Bathroom',
-    desc: 'Daily showers create ideal mold conditions behind walls, on grout, and in exhaust ducts. A weak exhaust fan allows moisture to spread.',
-    link: 'pages/indoor-air-quality-101.html',
+    desc: 'Daily showers create ideal mold conditions behind walls, on grout, and in exhaust ducts. A weak exhaust fan lets moisture seep into wall cavities where mold thrives unseen.',
+    link: 'pages/mold-in-bathroom.html',
     color: 0x44ddaa,
     camOffset: new THREE.Vector3(-4, 7, 14),
     lookAt: new THREE.Vector3(4, 6, 0),
@@ -84,8 +84,8 @@ const ROOMS = {
   },
   attic: {
     name: 'Attic / HVAC',
-    desc: 'Ducts in unconditioned attic space lose energy and can pull contaminated air through leaks at joints and connections.',
-    link: 'pages/indoor-air-quality-101.html',
+    desc: 'Ducts in unconditioned attic space lose energy and pull contaminated air through leaks at joints. Mold inside HVAC coils and drain pans gets blown into every room.',
+    link: 'pages/mold-in-hvac.html',
     color: 0xffcc44,
     camOffset: new THREE.Vector3(0, 14, 16),
     lookAt: new THREE.Vector3(0, 9.5, 0),
@@ -97,8 +97,8 @@ const ROOMS = {
   },
   crawlspace: {
     name: 'Crawlspace',
-    desc: 'Ground moisture, radon gas, and mold spores rise through the floor. Without a sealed vapor barrier, your home breathes contaminated air.',
-    link: 'pages/indoor-air-quality-101.html',
+    desc: 'Ground moisture, radon gas, and mold spores rise through the floor. Without a sealed vapor barrier, contaminated air enters every room via the stack effect.',
+    link: 'pages/mold-in-crawlspace.html',
     color: 0xaa88ff,
     camOffset: new THREE.Vector3(0, 0, 18),
     lookAt: new THREE.Vector3(0, -1, 0),
@@ -219,6 +219,7 @@ class HouseExplorer {
     this.pointer = new THREE.Vector2();
     this.canvas.addEventListener('pointerdown', (e) => this.onDown(e));
     this.canvas.addEventListener('pointerup', (e) => this.onUp(e));
+    this.canvas.addEventListener('pointermove', (e) => this.onHover(e));
     window.addEventListener('resize', () => this.resize());
 
     const resetBtn = document.getElementById('houseResetBtn');
@@ -227,7 +228,24 @@ class HouseExplorer {
     if (roofBtn) roofBtn.addEventListener('click', () => this.toggleRoof());
 
     this.resize();
+    this.setupScrollEntrance();
     this.animate();
+  }
+
+  // ── Scroll entrance animation ──────────────────────
+  setupScrollEntrance() {
+    if (!this.houseGroup) return;
+    this.houseGroup.scale.set(0.01, 0.01, 0.01);
+    this._entranceDone = false;
+    this._entranceProgress = 0;
+
+    const section = this.canvas.closest('.house-vis') || this.canvas.parentElement;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting && !this._entranceDone) {
+        this._entranceStarted = true;
+      }
+    }, { threshold: 0.15 });
+    observer.observe(section);
   }
 
   // ── Lighting ───────────────────────────────────────
@@ -314,6 +332,11 @@ class HouseExplorer {
     right.position.set(8, 4, 0);
     house.add(right);
     addEdges(right);
+
+    // Front wall (transparent cutaway so you can see inside)
+    const frontWall = box(16 + T, 8, T, mat(P.wall, { t: true, o: 0.08 }));
+    frontWall.position.set(0, 4, 5);
+    house.add(frontWall);
 
     // Centre dividing wall (vertical)
     const divV = box(T, 8, 10, wI);
@@ -421,6 +444,7 @@ class HouseExplorer {
     this.buildBathroom(house);
     this.buildAttic(house);
     this.buildCrawlspaceDetails(house);
+    this.buildProblemIndicators(house);
 
     this.scene.add(house);
   }
@@ -953,6 +977,79 @@ class HouseExplorer {
     parent.add(g);
   }
 
+  // ── Problem Indicators (mold, moisture, stains) ────
+  buildProblemIndicators(parent) {
+    const moldM = mat(0x2a4a2a, { r: 1.0 });
+    const stainM = mat(0x8b7355, { r: 0.9, t: true, o: 0.7 });
+    const moistM = mat(0x6688aa, { r: 0.4, t: true, o: 0.5 });
+    const pulseMeshes = [];
+
+    // — Bathroom: mold on grout behind tub, water stain on ceiling —
+    const bathMold1 = box(1.8, 0.8, 0.03, moldM);
+    bathMold1.position.set(2.5, 5.2, -4.68);
+    parent.add(bathMold1);
+    pulseMeshes.push(bathMold1);
+
+    const bathMold2 = box(0.6, 0.4, 0.03, moldM);
+    bathMold2.position.set(3.6, 4.6, -4.68);
+    parent.add(bathMold2);
+
+    // Ceiling water stain (above tub area)
+    const bathStain = cyl(0.6, 0.5, 0.02, 12, stainM);
+    bathStain.position.set(3, 7.9, -2);
+    parent.add(bathStain);
+
+    // — Kitchen: moisture under sink, stain on wall —
+    const kitchenMoist = box(0.5, 0.04, 0.35, moistM);
+    kitchenMoist.position.set(5.5, 0.16, -4.15);
+    parent.add(kitchenMoist);
+
+    const kitchenStain = box(0.4, 0.6, 0.03, stainM);
+    kitchenStain.position.set(5.5, 0.6, -4.68);
+    parent.add(kitchenStain);
+    pulseMeshes.push(kitchenStain);
+
+    // — Living room: mold behind bookshelf area —
+    const livingMold = box(0.7, 0.5, 0.03, moldM);
+    livingMold.position.set(-1, 0.4, -4.68);
+    parent.add(livingMold);
+
+    // — Bedroom: VOC haze near dresser (off-gassing indicator) —
+    const vocHaze = box(1.8, 0.8, 0.8, mat(0xddcc66, { t: true, o: 0.06 }));
+    vocHaze.position.set(-2, 5.2, 3.5);
+    parent.add(vocHaze);
+
+    // — Attic: duct leak stain, mold on sheathing —
+    const atticMold = box(2, 0.03, 1.5, moldM);
+    atticMold.position.set(2, 8.15, -3);
+    parent.add(atticMold);
+    pulseMeshes.push(atticMold);
+
+    const ductStain = box(0.4, 0.03, 0.4, stainM);
+    ductStain.position.set(-1, 8.15, 0.5);
+    parent.add(ductStain);
+
+    // — Crawlspace: moisture on foundation, mold on joists —
+    const crawlMold = box(3, 0.03, 0.3, moldM);
+    crawlMold.position.set(-2, -0.05, -2);
+    parent.add(crawlMold);
+
+    const crawlMoist = box(4, 0.03, 3, moistM);
+    crawlMoist.position.set(1, -1.85, 1);
+    parent.add(crawlMoist);
+    pulseMeshes.push(crawlMoist);
+
+    // Dripping pipe indicator (small spheres under pipe joint)
+    const dropM = mat(0x6699cc, { t: true, o: 0.6 });
+    for (let i = 0; i < 3; i++) {
+      const drop = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 8), dropM);
+      drop.position.set(2 + i * 0.12, -0.9 - i * 0.15, -2);
+      parent.add(drop);
+    }
+
+    this._problemPulseMeshes = pulseMeshes;
+  }
+
   // ── Vent helper ────────────────────────────────────
   addVent(parent, x, y, z, w, h, isReturn) {
     const ventM = mat(isReturn ? 0xcccccc : 0xdddddd, { r: 0.3, m: 0.3 });
@@ -1248,6 +1345,28 @@ class HouseExplorer {
     }
   }
 
+  onHover(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    this.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hits = this.raycaster.intersectObjects(this.roomHitBoxes);
+
+    if (hits.length > 0) {
+      const roomId = hits[0].object.userData.roomId;
+      this.canvas.style.cursor = 'pointer';
+      if (this.hintEl && !this.activeRoom) {
+        this.hintEl.textContent = `Click to explore: ${ROOMS[roomId].name}`;
+      }
+    } else {
+      this.canvas.style.cursor = 'grab';
+      if (this.hintEl && !this.activeRoom) {
+        this.hintEl.textContent = 'Click a room to explore \u2022 Drag to orbit \u2022 Scroll to zoom';
+      }
+    }
+  }
+
   focusRoom(roomId) {
     const room = ROOMS[roomId];
     if (!room) return;
@@ -1364,6 +1483,16 @@ class HouseExplorer {
 
     this.controls.update();
 
+    // Scroll entrance scale-up
+    if (this._entranceStarted && !this._entranceDone) {
+      this._entranceProgress = Math.min(this._entranceProgress + dt * 0.8, 1);
+      // Elastic ease-out
+      const t = this._entranceProgress;
+      const s = t === 1 ? 1 : 1 - Math.pow(2, -10 * t) * Math.cos((t * 10 - 0.75) * (2 * Math.PI / 3));
+      this.houseGroup.scale.set(s, s, s);
+      if (this._entranceProgress >= 1) this._entranceDone = true;
+    }
+
     // Rotate fan blades
     if (this.fanBlades) {
       this.fanBlades.rotation.y += dt * 6;
@@ -1372,6 +1501,16 @@ class HouseExplorer {
     // Pulse highlight
     if (this._highlightLine) {
       this._highlightLine.material.opacity = 0.35 + Math.sin(Date.now() * 0.004) * 0.25;
+    }
+
+    // Pulse problem indicators (subtle glow)
+    if (this._problemPulseMeshes) {
+      const pulse = 0.5 + Math.sin(Date.now() * 0.003) * 0.3;
+      this._problemPulseMeshes.forEach(m => {
+        if (m.material.opacity !== undefined) {
+          m.material.opacity = pulse;
+        }
+      });
     }
 
     // Air particles
