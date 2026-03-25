@@ -1675,6 +1675,16 @@ p { margin-bottom: var(--space-md); color: var(--color-text-secondary); }
   .footer__grid {
     grid-template-columns: 1fr 1fr;
   }
+  .footer__bottom {
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-sm);
+    text-align: center;
+  }
+  .footer__bottom-links {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
 }
 
 @media (max-width: 480px) {
